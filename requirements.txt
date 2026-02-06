@@ -1,0 +1,3 @@
+# requirements.txt for BashHound - BloodHound JSON Analyzer
+
+networkx>=3.0
