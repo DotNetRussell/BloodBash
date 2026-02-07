@@ -13,7 +13,52 @@ from rich import print as rprint
 from tqdm import tqdm
 import time
 
+__version__ = "1.3.0"  # Feel free to update this as you make changes
+
 console = Console()
+
+# ────────────────────────────────────────────────
+# Intro Banner
+# ────────────────────────────────────────────────
+def print_intro_banner(mode_str):
+    console.rule(f"[bold magenta]BloodBash v{__version__} - SharpHound Offline Analyzer[/bold magenta]", style="magenta")
+    
+    console.print(Panel(
+        f"""
+Parses SharpHound JSON files → finds AD attack paths & misconfigurations
+
+What it shows:
+• High-value targets (admins, krbtgt, CAs, templates, NTAuth...)
+• AD CS misconfigs (ESC1–ESC8)
+• Dangerous ACLs & permissions
+• DCSync / replication rights
+• RBCD opportunities
+• Kerberoastable & AS-REP roastable accounts
+• Weak GPO rights
+• Shortest paths to high-value targets (optional)
+• Local admin / session summary (when data exists)
+
+Abuse suggestions: Shown once per vulnerable category (when found)
+Common tools: Certipy, Impacket, Rubeus, Mimikatz, SharpGPOAbuse, etc.
+
+Mode: [cyan]{mode_str}[/cyan]
+For authorized security testing / red teaming only.
+
+Use --help for all options.
+""",
+        title="Quick Overview",
+        border_style="bright_blue",
+        padding=(1, 2)
+    ))
+
+    console.print("[bold]Color guide:[/bold]")
+    console.print("  [red]Red[/red]          = Critical findings (ESCs, DCSync, dangerous rights)")
+    console.print("  [yellow]Yellow[/yellow]       = Medium risk (weak GPOs, roastable accounts)")
+    console.print("  [green]Green[/green]         = No issues / success / principals with rights")
+    console.print("  [cyan]Cyan[/cyan]          = Object names, targets, templates, types, counts")
+    console.print("  [magenta]Magenta[/magenta]     = Section headers & dividers only")
+    console.print("  [dim]Dim[/dim]           = Minor notes or empty results\n")
+
 
 # ────────────────────────────────────────────────
 # Type Mapping (SharpHound v6+)
@@ -295,7 +340,7 @@ def print_adcs_vulnerabilities(G):
                 not props.get('requiresmanagerapproval', False)
             ):
                 found = True
-                console.print(f"[red]ESC1/ESC2[/red]: [bold]{name}[/bold] (Enroll + weak config)")
+                console.print(f"[red]ESC1/ESC2[/red]: [bold cyan]{name}[/bold cyan] (Enroll + weak config)")
                 for u, _, edge in incoming:
                     if edge['label'] == 'Enroll':
                         console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
@@ -305,7 +350,7 @@ def print_adcs_vulnerabilities(G):
             dangerous = {'GenericAll', 'WriteDacl', 'WriteOwner', 'GenericWrite'}
             if any(r in rights for r in dangerous):
                 found = True
-                console.print(f"[red]ESC3[/red]: [bold]{name}[/bold] (no approval + dangerous rights)")
+                console.print(f"[red]ESC3[/red]: [bold cyan]{name}[/bold cyan] (no approval + dangerous rights)")
                 for u, _, edge in incoming:
                     if edge['label'] in dangerous:
                         console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edge['label']}]-->")
@@ -314,12 +359,12 @@ def print_adcs_vulnerabilities(G):
         if 'Enterprise CA' in d['type'] and 'EDITF_ATTRIBUTESUBJECALTNAME2' in d['props'].get('flags', []):
             if 'Enroll' in rights:
                 found = True
-                console.print(f"[red]ESC6[/red]: [bold]{name}[/bold] (EDITF_ATTRIBUTESUBJECALTNAME2 + Enroll)")
+                console.print(f"[red]ESC6[/red]: [bold cyan]{name}[/bold cyan] (EDITF_ATTRIBUTESUBJECALTNAME2 + Enroll)")
 
         # ESC8
         if 'NTAuth Store' in d['type'] and 'GenericAll' in rights:
             found = True
-            console.print(f"[red]ESC8[/red]: [bold]{name}[/bold] (GenericAll on NTAuth)")
+            console.print(f"[red]ESC8[/red]: [bold cyan]{name}[/bold cyan] (GenericAll on NTAuth)")
 
     if found:
         print_abuse_panel("ESC1-ESC8 (AD CS)")
@@ -343,7 +388,7 @@ def print_gpo_abuse(G):
         dangerous = {'GenericAll', 'WriteDacl', 'WriteOwner', 'GenericWrite'}
         if any(r in rights for r in dangerous):
             found = True
-            console.print(f"[yellow]Weak GPO[/yellow]: [bold]{name}[/bold]")
+            console.print(f"[yellow]Weak GPO[/yellow]: [bold cyan]{name}[/bold cyan]")
             for u, _, edge in incoming:
                 if edge['label'] in dangerous:
                     console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edge['label']}]-->")
@@ -392,7 +437,7 @@ def print_rbcd(G):
         props = d['props']
         if props.get('msds-allowedtodelegateto', []):
             found = True
-            console.print(f"  • [bold]{d['name']}[/bold] allows delegation from:")
+            console.print(f"  • [bold cyan]{d['name']}[/bold cyan] allows delegation from:")
             for tgt in props['msds-allowedtodelegateto']:
                 console.print(f"      - {tgt}")
 
@@ -417,7 +462,7 @@ def print_shortest_paths(G, max_paths=5, target_filter=None):
         return
 
     for tid, tname, ttype in targets[:5]:
-        console.print(f"\n[bold]Target:[/bold] {tname} ({ttype})")
+        console.print(f"\n[bold]Target:[/bold] [bold cyan]{tname}[/bold cyan] ({ttype})")
         count = 0
         for source in users:
             if source == tid or not nx.has_path(G, source, tid):
@@ -453,10 +498,10 @@ def print_dangerous_permissions(G):
         ]
         if dangerous_edges:
             found = True
-            console.print(f"\n[bold]{tname} ({ttype}):[/bold]")
+            console.print(f"\n[bold cyan]{tname} ({ttype}):[/bold cyan]")
             for principal_oid, right in dangerous_edges:
                 principal_name = G.nodes[principal_oid]['name']
-                console.print(f"  • [green]{principal_name}[/green] --[[yellow]{right}[/yellow]]--> {tname}")
+                console.print(f"  • [green]{principal_name}[/green] --[[yellow]{right}[/yellow]]--> [cyan]{tname}[/cyan]")
 
     if found:
         print_abuse_panel("Dangerous Permissions")
@@ -475,7 +520,7 @@ def print_kerberoastable(G):
         props = d.get('props', {})
         if props.get('hasspn', False) and not props.get('sensitive', False) and props.get('enabled', True):
             found = True
-            console.print(f"  • {d['name']}")
+            console.print(f"  • [cyan]{d['name']}[/cyan]")
 
     if found:
         print_abuse_panel("Kerberoastable")
@@ -491,7 +536,7 @@ def print_as_rep_roastable(G):
         props = d.get('props', {})
         if props.get('dontreqpreauth', False) and props.get('enabled', True):
             found = True
-            console.print(f"  • {d['name']}")
+            console.print(f"  • [cyan]{d['name']}[/cyan]")
 
     if found:
         print_abuse_panel("AS-REP Roastable")
@@ -583,6 +628,17 @@ def main():
         sys.exit(1)
 
     G, _ = build_graph(nodes)
+
+    # Determine mode string for banner
+    if args.all:
+        mode_str = "Full analysis (--all)"
+    elif any([args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse,
+              args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable]):
+        mode_str = "Selected checks"
+    else:
+        mode_str = "Default (verbose summary + common checks)"
+
+    print_intro_banner(mode_str)
 
     run_all = args.all or not any([
         args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse,
