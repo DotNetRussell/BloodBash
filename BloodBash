@@ -54,10 +54,10 @@ Use --help for all options.
     console.print("[bold]Color guide:[/bold]")
     console.print("  [red]Red[/red]          = Critical findings (ESCs, DCSync, dangerous rights)")
     console.print("  [yellow]Yellow[/yellow]       = Medium risk (weak GPOs, roastable accounts)")
-    console.print("  [green]Green[/green]         = No issues / success / principals with rights")
-    console.print("  [cyan]Cyan[/cyan]          = Object names, targets, templates, types, counts")
-    console.print("  [magenta]Magenta[/magenta]     = Section headers & dividers only")
-    console.print("  [dim]Dim[/dim]           = Minor notes or empty results\n")
+    console.print("  [green]Green[/green]        = No issues / success / principals with rights")
+    console.print("  [cyan]Cyan[/cyan]         = Object names, targets, templates, types, counts")
+    console.print("  [magenta]Magenta[/magenta]      = Section headers & dividers only")
+    console.print("  [dim]Dim[/dim]          = Minor notes or empty results\n")
 
 
 # ────────────────────────────────────────────────
