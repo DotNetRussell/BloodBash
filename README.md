@@ -1,37 +1,51 @@
-# BloodBash 🐾
 
-**BloodBash** is a lightweight, standalone BloodHound JSON analyzer written in Python.  
-It parses SharpHound (v6+) JSON files directly — no Neo4j, no BloodHound GUI required.
+![BloodBash verbose output example](https://i.imgur.com/m5RVnJZ.png)
 
-It builds a graph using `networkx`, detects object types correctly, finds attack paths, and implements several popular BloodHound-style queries such as shortest paths to high-value targets, dangerous permissions, kerberoastable accounts, and more.
+# BloodBash 🩸🐕
 
-Perfect for red teamers, pentest engagements, and quick AD reconnaissance when you only have raw SharpHound output.
+**BloodBash** is a powerful, standalone BloodHound JSON analyzer written in Python.  
+It parses SharpHound (v6+) JSON files offline — no Neo4j or BloodHound GUI needed.
+
+It builds a directed graph using `networkx`, correctly identifies object types, finds attack paths, detects vulnerabilities (especially ADCS ESC1–ESC8), and provides BloodHound-style queries with rich, colored output.
+
+Perfect for red teamers, OSCP/CRTP prep, and fast AD reconnaissance when you only have raw SharpHound data.
+
+![BloodBash verbose output example](https://i.imgur.com/Dx949oF.png)
+![BloodBash verbose output example](https://i.imgur.com/vb6FmTc.png)
+![BloodBash verbose output example](https://i.imgur.com/zVbyFZz.png)
 
 ## Features
 
-- Supports **SharpHound v6+** JSON format (users, computers, groups, GPOs, OUs, domains, cert templates, Enterprise CAs, Root CAs, NTAuth stores, etc.)
-- Builds a directed graph with relationships and ACLs
+- Full **SharpHound v6+** support (users, computers, groups, GPOs, OUs, domains, cert templates, Enterprise CAs, Root CAs, NTAuth stores, etc.)
+- Graph construction with relationships and ACLs
+- **Rich colored output** using `rich` (tables, panels, highlighted paths)
+- Progress bars (`tqdm`) during loading and graph building
 - Modular analysis with BloodHound-inspired queries:
   - Shortest paths to high-value targets
-  - Dangerous permissions (GenericAll, Owns, WriteDacl, ManageCA, Enroll, etc.)
-  - Unconstrained delegation
+  - Dangerous permissions (GenericAll, Owns, ManageCA, Enroll, etc.)
+  - **ADCS ESC1–ESC8 vulnerability detection** (enhanced checks for misconfigurations)
+  - **GPO abuse risks** (dangerous rights on GPOs)
+  - **DCSync / replication rights** on domain objects
+  - **Resource-Based Constrained Delegation (RBCD)**
   - Kerberoastable accounts
   - AS-REP roastable accounts (DONT_REQ_PREAUTH)
-  - High-value target listing
-- Verbose summary mode (object types, users, etc.)
-- No external dependencies beyond `networkx`
+  - Session / LocalAdmin summary
+- **Verbose mode** — object type counts, user list (top 30 + summary)
+- **Export** results to Markdown or JSON
+- **Fast mode** (`--fast`) — skips heavy pathfinding on large datasets
+- Simple custom query support (`--query`)
 
 ## Installation
 
 ```bash
 # Clone the repo
-git clone https://github.com/DotNetRussell/BloodBash.git
-cd BloodBash
+git clone https://github.com/yourusername/bloodbash.git
+cd bloodbash
 
-# Recommended: use a virtual environment
+# Recommended: virtual environment
 python3 -m venv venv
 source venv/bin/activate    # Linux/macOS
-venv\Scripts\activate       # Windows
+# or on Windows: venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
@@ -39,85 +53,92 @@ pip install -r requirements.txt
 
 ## Requirements
 
-- Python 3.8+
-- See [requirements.txt](#requirementstxt) for exact dependencies
+See [requirements.txt](requirements.txt):
+
+```
+networkx>=3.0
+rich>=13.0
+tqdm>=4.0
+```
 
 ## Usage
 
 ```bash
-# Basic usage (run all analyses)
-python3 BloodBash /path/to/sharphound/json
+# Run everything
+python3 BloodBash.py /path/to/sharphound/json --all
 
 # Specific analyses
-python3 BloodBash ./sharpout --dangerous-permissions
-python3 BloodBash . --shortest-paths --kerberoastable --verbose
+python3 BloodBash.py ./sharpout --adcs --dangerous-permissions --verbose
 
-# Run everything explicitly
-python3 BloodBash sharpout --all
+# Export results
+python3 BloodBash.py . --all --export=json
 
-# Show only high-value targets
-python3 BloodBash . --high-value
+# Fast mode (skip pathfinding)
+python3 BloodBash.py sharpout --all --fast
 ```
 
 ### Available Flags
 
-| Flag                        | Description                                      |
-|-----------------------------|--------------------------------------------------|
-| `--shortest-paths`          | Show shortest attack paths to high-value targets |
-| `--dangerous-permissions`   | Show dangerous ACLs on sensitive objects         |
-| `--unconstrained-delegation`| List objects with unconstrained delegation       |
-| `--kerberoastable`          | List kerberoastable user accounts                |
-| `--as-rep-roastable`        | List AS-REP roastable accounts                   |
-| `--high-value`              | List high-value targets only                     |
-| `--verbose`                 | Show detailed object type and user summary       |
-| `--all`                     | Run all available analyses                       |
+| Flag                        | Description                                          |
+|-----------------------------|------------------------------------------------------|
+| `--shortest-paths`          | Show shortest attack paths to high-value targets     |
+| `--dangerous-permissions`   | Dangerous ACLs on sensitive objects                  |
+| `--adcs`                    | ADCS ESC1–ESC8 vulnerability checks                  |
+| `--gpo-abuse`               | Detect weak GPO permissions                          |
+| `--dcsync`                  | DCSync / replication rights                          |
+| `--rbcd`                    | Resource-Based Constrained Delegation targets        |
+| `--sessions`                | Session / LocalAdmin summary                         |
+| `--kerberoastable`          | Kerberoastable accounts                              |
+| `--as-rep-roastable`        | AS-REP roastable accounts                            |
+| `--verbose`                 | Show detailed object type & user summary             |
+| `--all`                     | Run all analyses                                     |
+| `--export [md|json]`        | Export results to file (default: md)                 |
+| `--fast`                    | Skip heavy pathfinding for speed                     |
 
-If no flags are provided, **all** analyses run by default (same as `--all`).
+If no flags are specified, the script runs in a minimal mode. Use `--all` for full analysis.
 
-## Examples
-
-```bash
-# Quick ADCS / PKI abuse check
-python3 BloodBash sharpout --dangerous-permissions --high-value
-
-# Kerberoasting recon
-python3 BloodBash . --kerberoastable --as-rep-roastable
-
-# Full report with paths
-python3 BloodBash sharpout --shortest-paths --verbose --all
-```
-
-## Output Example
+## Example Output
 
 ```
-[+] Processed 42 JSON files → 1247 objects loaded
-[+] Graph: 1247 nodes, 5832 edges
+Loading JSON files... ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+✓ Loaded 304 objects from 7 files
+Building graph: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 304/304 [00:00<00:00, 71002.81node/s]
+✓ Graph built: 304 nodes, 1819 edges
 
-=== High-Value Targets ===
-  • DOMAIN ADMINS@CORP (Group)
-  • KRBTGT@CORP (User)
-  • PHANTOM-DC01-CA@CORP (Enterprise CA)
+VERBOSE SUMMARY
+┌─────────────────────────────┐
+│        Object Types         │
+├───────────────┬─────────────┤
+│ Group         │        113  │
+│ User          │         49  │
+│ Computer      │         20  │
+│ Certificate Template │ 63  │
+│ Enterprise CA │          4  │
+└───────────────┴─────────────┘
+
+Users (49):
+  • KRBTGT@PHANTOM.CORP
+  • ADMINISTRATOR@PHANTOM.CORP
   ...
 
-=== Dangerous Permissions on High-Value Objects ===
-DOMAIN ADMINS@CORP (Group):
-  • LOWPRIVUSER --[GenericAll]--> DOMAIN ADMINS@CORP
-
-PHANTOM-DC01-CA@CORP (Enterprise CA):
-  • SOMEUSER --[ManageCA]--> PHANTOM-DC01-CA@CORP
-  ...
+ADCS ESC Vulnerabilities (ESC1–ESC8)
+ESC1/ESC2: USER-SPECIFIC-TEMPLATE@CORP (Enroll + weak config)
+  → LOWPRIVUSER can Enroll
+...
 ```
 
 ## Contributing
 
-Pull requests welcome!  
-Especially interested in:
-- More BloodHound-style queries (RBCD, GPO abuse, ESC1–8 specific checks)
-- Better path formatting / export to text/JSON
-- Colorized output (using `rich` or `termcolor`)
+Pull requests are welcome!  
+Ideas / high-priority additions:
+- Full path chaining for ADCS ESC scenarios
+- GPO change parsing (Scheduled Tasks, etc.)
+- Shadow Credentials detection
+- HTML export with embedded graphs
+- `--query` DSL improvements
 
 ## License
 
-MIT License — feel free to use, modify, and share.
+MIT License — free to use, modify, and share.
 
 Happy hunting! 🩸🐕
