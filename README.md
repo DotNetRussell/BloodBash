@@ -10,6 +10,7 @@ It builds a directed graph using `networkx`, correctly identifies object types, 
 
 Perfect for red teamers, OSCP/CRTP prep, and fast AD reconnaissance when you only have raw SharpHound data.
 
+![BloodBash verbose output example](https://i.imgur.com/8PqzYAU.png)
 ![BloodBash verbose output example](https://i.imgur.com/Dx949oF.png)
 ![BloodBash verbose output example](https://i.imgur.com/vb6FmTc.png)
 ![BloodBash verbose output example](https://i.imgur.com/zVbyFZz.png)
