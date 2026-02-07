@@ -102,31 +102,34 @@ If no flags are specified, the script runs in a minimal mode. Use `--all` for fu
 ## Example Output
 
 ```
-Loading JSON files... ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
-✓ Loaded 304 objects from 7 files
-Building graph: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 304/304 [00:00<00:00, 71002.81node/s]
-✓ Graph built: 304 nodes, 1819 edges
+────────────────────────────────────────────────────────────── Resource-Based Constrained Delegation (RBCD) ──────────────────────────────────────────────────────────────
+No RBCD configured computers found
+────────────────────────────────────────────────────────────────────── Session / LocalAdmin Summary ──────────────────────────────────────────────────────────────────────
+        Top Local Admins        
+┏━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━┓
+┃ Principal ┃ Count ┃ Examples ┃
+┡━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━┩
+└───────────┴───────┴──────────┘
+──────────────────────────────────────────────────────────────────────── Kerberoastable Accounts ─────────────────────────────────────────────────────────────────────────
+  • SQL_SVC
+  • WEB_SVC
+╭────────────────────────────────────────────────────────────────── Abuse Suggestions: Kerberoastable ───────────────────────────────────────────────────────────────────╮
+│                                                                                                                                                                        │
+│ Impact: Request TGS → offline crack weak service account password.                                                                                                     │
+│                                                                                                                                                                        │
+│ Tool: Impacket                                                                                                                                                         │
+│                                                                                                                                                                        │
+│ GetUserSPNs.py -request -outputfile hashes.txt domain/user:password@domain.local                                                                                       │
+│                                                                                                                                                                        │
+│ Crack:                                                                                                                                                                 │
+│ hashcat -m 13100 hashes.txt wordlist.txt                                                                                                                               │
+│                                                                                                                                                                        │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+────────────────────────────────────────────────────────────── AS-REP Roastable Accounts (DONT_REQ_PREAUTH) ──────────────────────────────────────────────────────────────
+None found
 
-VERBOSE SUMMARY
-┌─────────────────────────────┐
-│        Object Types         │
-├───────────────┬─────────────┤
-│ Group         │        113  │
-│ User          │         49  │
-│ Computer      │         20  │
-│ Certificate Template │ 63  │
-│ Enterprise CA │          4  │
-└───────────────┴─────────────┘
-
-Users (49):
-  • KRBTGT@PHANTOM.CORP
-  • ADMINISTRATOR@PHANTOM.CORP
-  ...
-
-ADCS ESC Vulnerabilities (ESC1–ESC8)
-ESC1/ESC2: USER-SPECIFIC-TEMPLATE@CORP (Enroll + weak config)
-  → LOWPRIVUSER can Enroll
-...
+Completed in 0.08 seconds
+                                                                                                                                    
 ```
 
 ## Contributing
