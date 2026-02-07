@@ -12,8 +12,9 @@ Perfect for red teamers, OSCP/CRTP prep, and fast AD reconnaissance when you onl
 
 ![BloodBash verbose output example](https://i.imgur.com/8PqzYAU.png)
 ![BloodBash verbose output example](https://i.imgur.com/Dx949oF.png)
-![BloodBash verbose output example](https://i.imgur.com/vb6FmTc.png)
 ![BloodBash verbose output example](https://i.imgur.com/zVbyFZz.png)
+![BloodBash verbose output example](https://i.imgur.com/vGSOFc0.png)
+
 
 ## Features
 
