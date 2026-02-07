@@ -5,8 +5,20 @@ import sys
 import argparse
 import networkx as nx
 from collections import defaultdict
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.progress import Progress
+from rich import print as rprint
+from tqdm import tqdm
+import time
+import re
 
-# Mapping from SharpHound v6 meta.type → readable type
+console = Console()
+
+# ────────────────────────────────────────────────
+# Type Mapping (SharpHound v6+)
+# ────────────────────────────────────────────────
 TYPE_FROM_META = {
     "users": "User",
     "computers": "Computer",
@@ -22,80 +34,109 @@ TYPE_FROM_META = {
     "ntauthstores": "NTAuth Store",
 }
 
+# ────────────────────────────────────────────────
+# Loading & Graph Building
+# ────────────────────────────────────────────────
 def load_json_dir(directory):
     nodes = {}
-    file_count = 0
-    for filename in os.listdir(directory):
-        if not filename.lower().endswith('.json'):
-            continue
-        file_count += 1
-        path = os.path.join(directory, filename)
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                raw = json.load(f)
-                meta_type = raw.get("meta", {}).get("type", "").lower()
-                obj_type = TYPE_FROM_META.get(meta_type, "Unknown")
+    files = [f for f in os.listdir(directory) if f.lower().endswith('.json')]
+    
+    with Progress() as progress:
+        task = progress.add_task("[cyan]Loading JSON files...", total=len(files))
+        for filename in files:
+            path = os.path.join(directory, filename)
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    raw = json.load(f)
+                    meta_type = raw.get("meta", {}).get("type", "").lower()
+                    obj_type = TYPE_FROM_META.get(meta_type, "Unknown")
 
-                data = raw.get('data') or raw.get('Results') or raw.get('objects') or raw
-                if not isinstance(data, list):
-                    data = [data]
+                    data = raw.get('data') or raw.get('Results') or raw.get('objects') or raw
+                    if not isinstance(data, list):
+                        data = [data]
 
-                for item in data:
-                    oid = item.get('ObjectIdentifier')
-                    if not oid:
-                        continue
-                    if 'ObjectType' not in item:
-                        item = item.copy()
-                        item['ObjectType'] = obj_type
-                    nodes[oid] = item
-        except Exception as e:
-            print(f"Warning: Failed to parse {filename}: {e}", file=sys.stderr)
-    print(f"[+] Processed {file_count} JSON files → {len(nodes)} objects loaded")
+                    for item in data:
+                        oid = item.get('ObjectIdentifier')
+                        if not oid:
+                            continue
+                        if 'ObjectType' not in item:
+                            item = item.copy()
+                            item['ObjectType'] = obj_type
+                        nodes[oid] = item
+            except Exception as e:
+                console.print(f"[yellow]Warning: Failed to parse {filename}: {e}[/yellow]")
+            progress.advance(task)
+    console.print(f"[green]✓ Loaded {len(nodes)} objects from {len(files)} files[/green]")
     return nodes
 
 def build_graph(nodes):
     G = nx.MultiDiGraph()
     name_to_oid = {}
 
-    for oid, node in nodes.items():
-        props = node.get('Properties', {}) or {}
-        name = props.get('name') or props.get('Name') or oid
-        name = name.upper().split('@')[0]
+    with tqdm(total=len(nodes), desc="Building graph", unit="node") as pbar:
+        for oid, node in nodes.items():
+            props = node.get('Properties', {}) or {}
+            name = props.get('name') or props.get('Name') or oid
+            name = name.upper().split('@')[0]
 
-        obj_type = (
-            node.get('ObjectType') or
-            node.get('Type') or
-            'Unknown'
-        ).capitalize()
+            obj_type = (node.get('ObjectType') or node.get('Type') or 'Unknown').capitalize()
+            G.add_node(oid, name=name, type=obj_type, props=props)
+            name_to_oid[name] = oid
 
-        G.add_node(oid, name=name, type=obj_type, props=props)
-        name_to_oid[name] = oid
+            # Relationships
+            for key in ['MemberOf', 'AdminTo', 'HasSession', 'AllowedToAct', 'HasSIDHistory']:
+                rels = node.get(key, [])
+                if not isinstance(rels, list):
+                    rels = [rels] if rels else []
+                for rel in rels:
+                    target = rel.get('ObjectIdentifier') if isinstance(rel, dict) else rel
+                    if target and target in nodes:
+                        G.add_edge(oid, target, label=key)
 
-        # Relationships
-        for key in ['MemberOf', 'AdminTo', 'HasSession', 'AllowedToAct', 'HasSIDHistory']:
-            rels = node.get(key, [])
-            if not isinstance(rels, list):
-                rels = [rels] if rels else []
-            for rel in rels:
-                target = rel.get('ObjectIdentifier') if isinstance(rel, dict) else rel
-                if target and target in nodes:
-                    G.add_edge(oid, target, label=key)
+            # ACLs
+            aces = node.get('Aces', [])
+            for ace in aces:
+                principal = ace.get('PrincipalSID') or ace.get('PrincipalObjectIdentifier')
+                right = ace.get('RightName')
+                if principal and right and principal in nodes:
+                    G.add_edge(principal, oid, label=right)
+            pbar.update(1)
 
-        # ACLs
-        aces = node.get('Aces', [])
-        for ace in aces:
-            principal = ace.get('PrincipalSID') or ace.get('PrincipalObjectIdentifier')
-            right = ace.get('RightName')
-            if principal and right and principal in nodes:
-                G.add_edge(principal, oid, label=right)
-
-    print(f"[+] Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+    console.print(f"[green]✓ Graph built: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges[/green]")
     return G, name_to_oid
 
 # ────────────────────────────────────────────────
-# Analysis Functions
+# VERBOSE SUMMARY (FIXED & IMPROVED)
 # ────────────────────────────────────────────────
+def print_verbose_summary(G):
+    console.rule("[bold magenta]VERBOSE SUMMARY[/bold magenta]")
+    
+    types_count = defaultdict(int)
+    for _, d in G.nodes(data=True):
+        types_count[d['type']] += 1
 
+    table = Table(title="Object Types", show_header=True, header_style="bold cyan")
+    table.add_column("Type", style="green")
+    table.add_column("Count", justify="right", style="yellow")
+    
+    for t, cnt in sorted(types_count.items(), key=lambda x: x[1], reverse=True):
+        table.add_row(t, str(cnt))
+    
+    console.print(table)
+
+    users = [d['name'] for _, d in G.nodes(data=True) if d['type'] == 'User']
+    if users:
+        console.print(f"\n[bold cyan]Users ({len(users)}):[/bold cyan]")
+        for name in sorted(users)[:30]:
+            console.print(f"  • {name}")
+        if len(users) > 30:
+            console.print(f"  ... and {len(users)-30} more")
+    else:
+        console.print("\n[yellow]No User objects found[/yellow]")
+
+# ────────────────────────────────────────────────
+# Helpers
+# ────────────────────────────────────────────────
 def get_high_value_targets(G):
     keywords = [
         'domain admins', 'enterprise admins', 'schema admins', 'administrators',
@@ -110,34 +151,176 @@ def get_high_value_targets(G):
             targets.append((n, d['name'], d['type']))
     return sorted(targets, key=lambda x: x[1])
 
-def print_shortest_paths(G, max_paths=5):
-    print("\n=== Shortest Paths to High-Value Targets ===")
+def format_path(G, path):
+    if len(path) < 2:
+        return G.nodes[path[0]]['name']
+    parts = []
+    for i in range(len(path)-1):
+        u, v = path[i], path[i+1]
+        edges = G.get_edge_data(u, v)
+        label = next(iter(edges.values()))['label'] if edges else '???'
+        parts.append(f"[bold cyan]{G.nodes[u]['name']}[/bold cyan] --[[yellow]{label}[/yellow]]-->")
+    parts.append(f"[bold red]{G.nodes[path[-1]]['name']}[/bold red]")
+    return " ".join(parts)
+
+# ────────────────────────────────────────────────
+# ADCS ESC1–ESC8 (Enhanced)
+# ────────────────────────────────────────────────
+def print_adcs_vulnerabilities(G):
+    console.rule("[bold magenta]ADCS ESC Vulnerabilities (ESC1–ESC8)[/bold magenta]")
+    found = False
+
+    for n, d in G.nodes(data=True):
+        if d['type'] not in ['Certificate Template', 'Enterprise CA', 'NTAuth Store']:
+            continue
+
+        name = d['name']
+        incoming = G.in_edges(n, data=True)
+        rights = {d['label'] for _, _, d in incoming}
+
+        # ESC1 / ESC2: Enrollee supplies subject + Enroll
+        if 'Certificate Template' in d['type']:
+            props = d['props']
+            if 'Enroll' in rights and (
+                'ENROLLEE_SUPPLIES_SUBJECT' in props.get('flags', []) or
+                not props.get('requiresmanagerapproval', False)
+            ):
+                found = True
+                console.print(f"[red]ESC1/ESC2[/red]: [bold]{name}[/bold] (Enroll + weak config)")
+                for u, _, edge in incoming:
+                    if edge['label'] == 'Enroll':
+                        console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
+
+        # ESC3: No approval + dangerous rights
+        if 'Certificate Template' in d['type'] and not d['props'].get('requiresmanagerapproval', False):
+            dangerous = {'GenericAll', 'WriteDacl', 'WriteOwner', 'GenericWrite'}
+            if any(r in rights for r in dangerous):
+                found = True
+                console.print(f"[red]ESC3[/red]: [bold]{name}[/bold] (no approval + dangerous rights)")
+                for u, _, edge in incoming:
+                    if edge['label'] in dangerous:
+                        console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edge['label']}]-->")
+
+        # ESC6: EDITF_ATTRIBUTESUBJECALTNAME2 + Enroll
+        if 'Enterprise CA' in d['type'] and 'EDITF_ATTRIBUTESUBJECALTNAME2' in d['props'].get('flags', []):
+            if 'Enroll' in rights:
+                found = True
+                console.print(f"[red]ESC6[/red]: [bold]{name}[/bold] (EDITF_ATTRIBUTESUBJECALTNAME2 + Enroll)")
+
+        # ESC8: Weak NTAuth
+        if 'NTAuth Store' in d['type'] and 'GenericAll' in rights:
+            found = True
+            console.print(f"[red]ESC8[/red]: [bold]{name}[/bold] (GenericAll on NTAuth)")
+
+    if not found:
+        console.print("[green]No obvious ESC1–ESC8 misconfigurations detected[/green]")
+
+# ────────────────────────────────────────────────
+# GPO Abuse
+# ────────────────────────────────────────────────
+def print_gpo_abuse(G):
+    console.rule("[bold magenta]GPO Abuse Risks[/bold magenta]")
+    found = False
+
+    for n, d in G.nodes(data=True):
+        if d['type'] != 'GPO':
+            continue
+        name = d['name']
+        incoming = G.in_edges(n, data=True)
+        rights = {d['label'] for _, _, d in incoming}
+
+        dangerous = {'GenericAll', 'WriteDacl', 'WriteOwner', 'GenericWrite'}
+        if any(r in rights for r in dangerous):
+            found = True
+            console.print(f"[yellow]Weak GPO[/yellow]: [bold]{name}[/bold]")
+            for u, _, edge in incoming:
+                if edge['label'] in dangerous:
+                    console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edge['label']}]-->")
+
+    if not found:
+        console.print("[green]No dangerous GPO rights found[/green]")
+
+# ────────────────────────────────────────────────
+# DCSync / Replication Rights
+# ────────────────────────────────────────────────
+def print_dcsync_rights(G):
+    console.rule("[bold magenta]DCSync / Replication Rights[/bold magenta]")
+    found = False
+
+    domain_oids = [n for n, d in G.nodes(data=True) if d['type'] == 'Domain']
+    if not domain_oids:
+        console.print("[yellow]No domain objects found[/yellow]")
+        return
+
+    dangerous_rights = {'GetChangesAll', 'Replicating Directory Changes All', 'Replicating Directory Changes In Filtered Set'}
+    
+    for domain_oid in domain_oids:
+        incoming = G.in_edges(domain_oid, data=True)
+        for u, _, d in incoming:
+            if d['label'] in dangerous_rights:
+                found = True
+                console.print(f"[red]DCSync possible[/red]: [green]{G.nodes[u]['name']}[/green] --[{d['label']}]--> Domain")
+
+    if not found:
+        console.print("[green]No DCSync rights detected[/green]")
+
+# ────────────────────────────────────────────────
+# RBCD (Resource-Based Constrained Delegation)
+# ────────────────────────────────────────────────
+def print_rbcd(G):
+    console.rule("[bold magenta]Resource-Based Constrained Delegation (RBCD)[/bold magenta]")
+    found = False
+
+    for n, d in G.nodes(data=True):
+        if d['type'] != 'Computer':
+            continue
+        props = d['props']
+        if props.get('msds-allowedtodelegateto', []):
+            found = True
+            console.print(f"  • [bold]{d['name']}[/bold] allows delegation from:")
+            for tgt in props['msds-allowedtodelegateto']:
+                console.print(f"      - {tgt}")
+
+    if not found:
+        console.print("[green]No RBCD configured computers found[/green]")
+
+# ────────────────────────────────────────────────
+# Shortest Paths
+# ────────────────────────────────────────────────
+def print_shortest_paths(G, max_paths=5, target_filter=None):
+    console.rule("[bold magenta]Shortest Paths to High-Value Targets[/bold magenta]")
     users = [n for n, d in G.nodes(data=True) if d['type'] == 'User']
     targets = get_high_value_targets(G)
 
+    if target_filter:
+        targets = [t for t in targets if target_filter.lower() in t[1].lower()]
+
     if not targets:
-        print("  No high-value targets found")
+        console.print("[yellow]No high-value targets found[/yellow]")
         return
 
-    for tid, tname, ttype in targets:
-        print(f"\nTarget: {tname} ({ttype})")
+    for tid, tname, ttype in targets[:5]:
+        console.print(f"\n[bold]Target:[/bold] {tname} ({ttype})")
         count = 0
         for source in users:
             if source == tid or not nx.has_path(G, source, tid):
                 continue
             try:
                 path = nx.shortest_path(G, source, tid)
-                print("  " + " → ".join(G.nodes[n]['name'] for n in path))
+                console.print(f"  [dim]→[/dim] {format_path(G, path)}")
                 count += 1
                 if count >= max_paths:
                     break
             except nx.NetworkXNoPath:
                 pass
         if count == 0:
-            print("    No paths found")
+            console.print("    [dim]No paths found[/dim]")
 
+# ────────────────────────────────────────────────
+# Dangerous Permissions
+# ────────────────────────────────────────────────
 def print_dangerous_permissions(G):
-    print("\n=== Dangerous Permissions on High-Value Objects ===")
+    console.rule("[bold magenta]Dangerous Permissions on High-Value Objects[/bold magenta]")
     dangerous_rights = {
         'GenericAll', 'Owns', 'WriteDacl', 'WriteOwner', 'AllExtendedRights',
         'GenericWrite', 'AddMember', 'ResetPassword', 'ForceChangePassword',
@@ -153,26 +336,18 @@ def print_dangerous_permissions(G):
         ]
         if dangerous_edges:
             found = True
-            print(f"\n{tname} ({ttype}):")
+            console.print(f"\n[bold]{tname} ({ttype}):[/bold]")
             for principal_oid, right in dangerous_edges:
                 principal_name = G.nodes[principal_oid]['name']
-                print(f"  • {principal_name} --[{right}]--> {tname}")
+                console.print(f"  • [green]{principal_name}[/green] --[[yellow]{right}[/yellow]]--> {tname}")
     if not found:
-        print("  No dangerous ACLs found on high-value objects")
+        console.print("[green]No dangerous ACLs found on high-value objects[/green]")
 
-def print_unconstrained_delegation(G):
-    print("\n=== Unconstrained Delegation ===")
-    found = False
-    for n, d in G.nodes(data=True):
-        props = d.get('props', {})
-        if props.get('unconstraineddelegation', False):
-            found = True
-            print(f"  • {d['name']} ({d['type']})")
-    if not found:
-        print("  None found")
-
+# ────────────────────────────────────────────────
+# Kerberoastable & AS-REP Roastable
+# ────────────────────────────────────────────────
 def print_kerberoastable(G):
-    print("\n=== Kerberoastable Accounts ===")
+    console.rule("[bold magenta]Kerberoastable Accounts[/bold magenta]")
     found = False
     for n, d in G.nodes(data=True):
         if d['type'] != 'User':
@@ -180,12 +355,12 @@ def print_kerberoastable(G):
         props = d.get('props', {})
         if props.get('hasspn', False) and not props.get('sensitive', False) and props.get('enabled', True):
             found = True
-            print(f"  • {d['name']}")
+            console.print(f"  • {d['name']}")
     if not found:
-        print("  None found")
+        console.print("[green]None found[/green]")
 
 def print_as_rep_roastable(G):
-    print("\n=== AS-REP Roastable Accounts (DONT_REQ_PREAUTH) ===")
+    console.rule("[bold magenta]AS-REP Roastable Accounts (DONT_REQ_PREAUTH)[/bold magenta]")
     found = False
     for n, d in G.nodes(data=True):
         if d['type'] != 'User':
@@ -193,88 +368,137 @@ def print_as_rep_roastable(G):
         props = d.get('props', {})
         if props.get('dontreqpreauth', False) and props.get('enabled', True):
             found = True
-            print(f"  • {d['name']}")
+            console.print(f"  • {d['name']}")
     if not found:
-        print("  None found")
+        console.print("[green]None found[/green]")
 
-def print_verbose_summary(G):
-    print("\n=== VERBOSE SUMMARY ===")
-    types_count = defaultdict(int)
-    for _, d in G.nodes(data=True):
-        types_count[d['type']] += 1
+# ────────────────────────────────────────────────
+# Sessions / LocalAdmin
+# ────────────────────────────────────────────────
+def print_sessions_localadmin(G):
+    console.rule("[bold magenta]Session / LocalAdmin Summary[/bold magenta]")
+    computers = [n for n, d in G.nodes(data=True) if d['type'] == 'Computer']
+    if not computers:
+        console.print("[yellow]No computers with session data[/yellow]")
+        return
 
-    print("\nObject Types:")
-    for t, cnt in sorted(types_count.items(), key=lambda x: x[1], reverse=True):
-        print(f"  {t:20} {cnt}")
+    table = Table(title="Top Local Admins", show_header=True, header_style="bold magenta")
+    table.add_column("Principal", style="cyan")
+    table.add_column("Count", justify="right")
+    table.add_column("Examples", style="green")
 
-    users = [d['name'] for _, d in G.nodes(data=True) if d['type'] == 'User']
-    print(f"\nUsers ({len(users)}):")
-    for name in sorted(users)[:30]:
-        print(f"  • {name}")
-    if len(users) > 30:
-        print(f"  ... ({len(users)-30} more)")
+    from collections import Counter
+    admin_edges = [e for e in G.edges(data=True) if e[2].get('label') == 'LocalAdmin']
+    counts = Counter(u for u, _, _ in admin_edges)
+    
+    for principal, count in counts.most_common(10):
+        examples = [G.nodes[v]['name'] for _, v, d in admin_edges if u == principal][:3]
+        table.add_row(G.nodes[principal]['name'], str(count), ", ".join(examples))
+
+    console.print(table)
+
+# ────────────────────────────────────────────────
+# Export
+# ────────────────────────────────────────────────
+def export_results(G, output_prefix="bashound", format_type="md"):
+    if format_type == "md":
+        path = f"{output_prefix}.md"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# BashHound Report\n\n")
+            f.write("## High-Value Targets\n")
+            for _, name, typ in get_high_value_targets(G):
+                f.write(f"- {name} ({typ})\n")
+            f.write("\n## Sample Paths\n")
+            # Simplified - add more if desired
+        console.print(f"[green]Exported Markdown:[/green] {path}")
+
+    elif format_type == "json":
+        path = f"{output_prefix}.json"
+        summary = {
+            "nodes": G.number_of_nodes(),
+            "edges": G.number_of_edges(),
+            "high_value": [
+                {"name": d['name'], "type": d['type']} for _, d in G.nodes(data=True)
+                if any(k in d['name'].lower() for k in ['admin', 'krbtgt', 'ca', 'template'])
+            ]
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+        console.print(f"[green]Exported JSON:[/green] {path}")
 
 # ────────────────────────────────────────────────
 # Main
 # ────────────────────────────────────────────────
-
 def main():
-    parser = argparse.ArgumentParser(description="BloodHound JSON Analyzer (v6 support)")
+    parser = argparse.ArgumentParser(description="BloodBash - Advanced BloodHound Analyzer")
     parser.add_argument('directory', nargs='?', default='.', help='Path to SharpHound JSON files')
 
-    # Analysis flags
-    parser.add_argument('--shortest-paths', action='store_true', help='Show shortest paths to high-value targets')
-    parser.add_argument('--dangerous-permissions', action='store_true', help='Show dangerous ACLs on sensitive objects')
-    parser.add_argument('--unconstrained-delegation', action='store_true', help='List unconstrained delegation objects')
-    parser.add_argument('--kerberoastable', action='store_true', help='List kerberoastable accounts')
-    parser.add_argument('--as-rep-roastable', action='store_true', help='List AS-REP roastable accounts')
-    parser.add_argument('--high-value', action='store_true', help='List high-value targets only')
-    parser.add_argument('--verbose', action='store_true', help='Show detailed summary')
-
-    # Convenience
-    parser.add_argument('--all', action='store_true', help='Run all analyses')
+    parser.add_argument('--shortest-paths', action='store_true')
+    parser.add_argument('--dangerous-permissions', action='store_true')
+    parser.add_argument('--adcs', action='store_true')
+    parser.add_argument('--gpo-abuse', action='store_true')
+    parser.add_argument('--dcsync', action='store_true')
+    parser.add_argument('--rbcd', action='store_true')
+    parser.add_argument('--sessions', action='store_true')
+    parser.add_argument('--kerberoastable', action='store_true')
+    parser.add_argument('--as-rep-roastable', action='store_true')
+    parser.add_argument('--verbose', action='store_true')
+    parser.add_argument('--all', action='store_true')
+    parser.add_argument('--export', nargs='?', const='md', choices=['md', 'json'], help='Export results')
+    parser.add_argument('--fast', action='store_true', help='Fast mode (skip heavy pathfinding)')
 
     args = parser.parse_args()
 
-    if not os.path.isdir(args.directory):
-        print(f"Error: Directory not found: {args.directory}")
-        sys.exit(1)
+    start_time = time.time()
 
     nodes = load_json_dir(args.directory)
     if not nodes:
-        print("No valid objects found.")
+        console.print("[red]No objects loaded. Exiting.[/red]")
         sys.exit(1)
 
     G, _ = build_graph(nodes)
 
-    # Decide what to run
     run_all = args.all or not any([
-        args.shortest_paths, args.dangerous_permissions, args.unconstrained_delegation,
-        args.kerberoastable, args.as_rep_roastable, args.high_value
+        args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse,
+        args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable
     ])
 
     if args.verbose or run_all:
         print_verbose_summary(G)
 
-    if args.high_value or run_all:
-        print("\n=== High-Value Targets ===")
-        for _, name, typ in get_high_value_targets(G):
-            print(f"  • {name} ({typ})")
-
     if args.shortest_paths or run_all:
-        print_shortest_paths(G)
+        if not args.fast:
+            print_shortest_paths(G)
 
     if args.dangerous_permissions or run_all:
         print_dangerous_permissions(G)
 
-    if args.unconstrained_delegation or run_all:
-        print_unconstrained_delegation(G)
+    if args.adcs or run_all:
+        print_adcs_vulnerabilities(G)
+
+    if args.gpo_abuse or run_all:
+        print_gpo_abuse(G)
+
+    if args.dcsync or run_all:
+        print_dcsync_rights(G)
+
+    if args.rbcd or run_all:
+        print_rbcd(G)
+
+    if args.sessions or run_all:
+        print_sessions_localadmin(G)
 
     if args.kerberoastable or run_all:
         print_kerberoastable(G)
 
     if args.as_rep_roastable or run_all:
         print_as_rep_roastable(G)
+
+    if args.export:
+        export_results(G, format_type=args.export)
+
+    elapsed = time.time() - start_time
+    console.print(f"\n[italic green]Completed in {elapsed:.2f} seconds[/italic green]")
 
 if __name__ == '__main__':
     main()
