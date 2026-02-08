@@ -1,7 +1,7 @@
 
 ![BloodBash verbose output example](https://i.imgur.com/m5RVnJZ.png)
 
-# BloodBash 🩸🐕
+# BloodBash 🩸#️
 ![Run Unit Tests](https://github.com/dotnetrussell/bloodbash/actions/workflows/run-tests.yml/badge.svg)
 
 **BloodBash** is a powerful, standalone BloodHound JSON analyzer written in Python.  
