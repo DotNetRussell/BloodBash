@@ -639,25 +639,37 @@ def print_shortest_paths(G, fast=False, max_paths=10, target_filter=None):
 def print_dangerous_permissions(G):
     console.rule("[bold magenta]Dangerous Permissions on High-Value Objects[/bold magenta]")
     dangerous_rights = {
-        'GenericAll', 'Owns', 'WriteDacl', 'WriteOwner', 'AllExtendedRights',
-        'GenericWrite', 'AddMember', 'ResetPassword', 'ForceChangePassword',
-        'ManageCA', 'ManageCertificates', 'Enroll', 'CertificateEnroll', 'WriteProperty'
-    }
+        'genericall', 'owns', 'writedacl', 'writeowner', 'allextendedrights',
+        'genericwrite', 'addmember', 'resetpassword', 'forcechangepassword',
+        'manageca', 'managecertificates', 'enroll', 'certificateenroll', 'writeproperty'
+    }  # Lowercase for case-insensitive matching
     targets = get_high_value_targets(G)
     found = False
-
+    if not targets:
+        console.print("[yellow]No high-value targets found[/yellow]")
+        return
+    
     for tid, tname, ttype in targets:
         incoming = G.in_edges(tid, data=True)
         dangerous_edges = [
-            (u, d['label']) for u, v, d in incoming if d['label'] in dangerous_rights
+            (u, d['label']) for u, v, d in incoming if d['label'].lower() in dangerous_rights and u in G.nodes
         ]
         if dangerous_edges:
             found = True
             console.print(f"\n[bold cyan]{tname} ({ttype}):[/bold cyan]")
+            # Group by right type for clarity
+            from collections import defaultdict
+            rights_by_type = defaultdict(list)
             for principal_oid, right in dangerous_edges:
-                principal_name = G.nodes[principal_oid]['name']
-                console.print(f"  • [green]{principal_name}[/green] --[[yellow]{right}[/yellow]]--> [cyan]{tname}[/cyan]")
-
+                rights_by_type[right].append(principal_oid)
+            
+            for right, principals in rights_by_type.items():
+                principal_names = [G.nodes[p]['name'] for p in principals[:5]]  # Limit to top 5
+                count = len(principals)
+                extra = f" ... and {count - 5} more" if count > 5 else ""
+                console.print(f"  • [yellow]{right}[/yellow]: [green]{', '.join(principal_names)}{extra}[/green]")
+            console.print(f"    [dim](Note: Only direct rights shown; indirect via groups not included)[/dim]")
+    
     if found:
         print_abuse_panel("Dangerous Permissions")
     else:

@@ -1,0 +1,23 @@
+{
+    "meta": {
+      "version": 6,
+      "type": "relationships"
+    },
+    "data": [
+      {
+        "start": "S-1-5-21-...-1000",
+        "end": "S-1-5-21-...-512",
+        "label": "GenericAll"
+      },
+      {
+        "start": "S-1-5-21-...-1001",
+        "end": "S-1-5-21-...-512",
+        "label": "ResetPassword"
+      },
+      {
+        "start": "S-1-5-21-...-1000",
+        "end": "S-1-5-21-...-1002",
+        "label": "WriteDacl"
+      }
+    ]
+  }
