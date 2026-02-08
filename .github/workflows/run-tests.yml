@@ -1,0 +1,29 @@
+name: Run Unit Tests
+
+on:
+  push:
+    branches:
+      - '*'  # Runs on pushes to any branch; adjust to 'main' or specific branches if needed
+  pull_request:  # Optional: Also run on pull requests for extra checks
+
+jobs:
+  test:
+    runs-on: ubuntu-latest  # Use a Linux environment
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4  # Check out your repository
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'  # Use Python 3.9; adjust if needed (e.g., '3.10' or '3.11')
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt  # Install from your requirements.txt
+
+    - name: Run tests
+      run: |
+        python test_bloodbash.py  # Run your test file
