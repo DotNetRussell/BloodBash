@@ -13,7 +13,7 @@ from rich import print as rprint
 from tqdm import tqdm
 import time
 
-__version__ = "1.3.0"  # Feel free to update this as you make changes
+__version__ = "1.0.0" 
 
 console = Console()
 
@@ -238,7 +238,6 @@ def build_graph(nodes):
     with tqdm(total=len(nodes), desc="Building graph", unit="node") as pbar:
         for oid, node in nodes.items():
             props = node.get('Properties', {}).copy()
-            # Corrected property keys (fixed spelling for EDITF_ATTRIBUTESUBJECTALTNAME2)
             for key in ['EnrolleeSuppliesSubject', 'RequiresManagerApproval', 
                         'EDITF_ATTRIBUTESUBJECTALTNAME2', 'enrolleesuppliessubject', 
                         'requiresmanagerapproval', 'editf_attributesubjectaltname2']:
@@ -407,7 +406,6 @@ def print_adcs_vulnerabilities(G):
         incoming = list(G.in_edges(n, data=True))
         rights = {edge_data['label'] for _, _, edge_data in incoming}
         
-        # Corrected defaults: RequiresManagerApproval defaults to False (permissive AD CS)
         enrollee_supplies = get_bool_prop(props, ['enrolleesuppliessubject', 'EnrolleeSuppliesSubject'])
         requires_mgr_approval = get_bool_prop(props, ['requiresmanagerapproval', 'RequiresManagerApproval'], default=False)
         no_approval = not requires_mgr_approval
@@ -532,9 +530,6 @@ def print_gpo_abuse(G):
     else:
         console.print("[green]No dangerous GPO rights found[/green]")
 
-# ────────────────────────────────────────────────
-# DCSync / Replication Rights
-# ────────────────────────────────────────────────
 # ────────────────────────────────────────────────
 # DCSync / Replication Rights
 # ────────────────────────────────────────────────
@@ -779,7 +774,7 @@ def export_results(G, output_prefix="bashound", format_type="md"):
             for _, name, typ in get_high_value_targets(G):
                 f.write(f"- {name} ({typ})\n")
             f.write("\n## Sample Paths\n")
-            # Simplified - add more if desired
+            
         console.print(f"[green]Exported Markdown:[/green] {path}")
 
     elif format_type == "json":
