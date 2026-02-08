@@ -341,10 +341,8 @@ def print_verbose_summary(G):
     users = [d['name'] for _, d in G.nodes(data=True) if d['type'] == 'User']
     if users:
         console.print(f"\n[bold cyan]Users ({len(users)}):[/bold cyan]")
-        for name in sorted(users)[:30]:
+        for name in sorted(users)[:len(users)]:
             console.print(f"  • {name}")
-        if len(users) > 30:
-            console.print(f"  ... and {len(users)-30} more")
     else:
         console.print("\n[yellow]No User objects found[/yellow]")
 
