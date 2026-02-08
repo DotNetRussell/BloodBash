@@ -1,0 +1,41 @@
+{
+    "meta": {
+      "version": 6,
+      "type": "certificate_templates"
+    },
+    "data": [
+      {
+        "ObjectIdentifier": "1.2.3.4.ESC1",
+        "Properties": {
+          "name": "ESC1-Vulnerable-Template",
+          "displayName": "ESC1 Vulnerable",
+          "type": "Certificate Template"
+        },
+        "EnrolleeSuppliesSubject": true,
+        "RequiresManagerApproval": false,
+        "data": [
+          {
+            "start": "S-1-5-21-...-1000",
+            "end": "1.2.3.4.ESC1",
+            "label": "Enroll"
+          }
+        ]
+      },
+      {
+        "ObjectIdentifier": "1.2.3.4.ESC3",
+        "Properties": {
+          "name": "ESC3-Vulnerable-Template",
+          "displayName": "ESC3 No Approval + Rights",
+          "type": "Certificate Template"
+        },
+        "RequiresManagerApproval": false,
+        "data": [
+          {
+            "start": "S-1-5-21-...-512",
+            "end": "1.2.3.4.ESC3",
+            "label": "GenericAll"
+          }
+        ]
+      }
+    ]
+  }

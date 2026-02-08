@@ -1,0 +1,59 @@
+{
+  "meta": {
+    "version": 6,
+    "type": "all",
+    "count": 7
+  },
+  "data": [
+    {
+      "ObjectIdentifier": "DOMAIN ADMINS@TESTLAB.LOCAL",
+      "Properties": {
+        "name": "DOMAIN ADMINS@TESTLAB.LOCAL",
+        "objectid": "DOMAIN ADMINS@TESTLAB.LOCAL",
+        "type": "Group"
+      }
+    },
+    {
+      "ObjectIdentifier": "ENTERPRISE ADMINS@TESTLAB.LOCAL",
+      "Properties": {
+        "name": "ENTERPRISE ADMINS@TESTLAB.LOCAL",
+        "type": "Group"
+      }
+    },
+    {
+      "ObjectIdentifier": "KRBTGT@TESTLAB.LOCAL",
+      "Properties": {
+        "name": "krbtgt",
+        "type": "User"
+      }
+    },
+    {
+      "ObjectIdentifier": "DC01$@TESTLAB.LOCAL",
+      "Properties": {
+        "name": "DC01$",
+        "type": "Computer"
+      }
+    },
+    {
+      "ObjectIdentifier": "DNSADMINS@TESTLAB.LOCAL",
+      "Properties": {
+        "name": "DnsAdmins@TESTLAB.LOCAL",
+        "type": "Group"
+      }
+    },
+    {
+      "ObjectIdentifier": "NORMALUSER@TESTLAB.LOCAL",
+      "Properties": {
+        "name": "bob.normal@TESTLAB.LOCAL",
+        "type": "User"
+      }
+    },
+    {
+      "ObjectIdentifier": "HELPADMINS@TESTLAB.LOCAL",
+      "Properties": {
+        "name": "HelpdeskAdmins",
+        "type": "Group"
+      }
+    }
+  ]
+}

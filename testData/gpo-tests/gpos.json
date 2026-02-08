@@ -1,0 +1,13 @@
+{
+    "meta": {"version": 6, "type": "gpos"},
+    "data": [
+      {
+        "ObjectIdentifier": "CN={12345678-1234-1234-1234-123456789ABC},CN=Policies,CN=System,DC=lab,DC=local",
+        "Properties": {"name": "Vulnerable-GPO", "type": "GPO"}
+      },
+      {
+        "ObjectIdentifier": "CN={87654321-4321-4321-4321-987654321FED},CN=Policies,CN=System,DC=lab,DC=local",
+        "Properties": {"name": "LowRisk-GPO", "type": "GPO"}
+      }
+    ]
+  }

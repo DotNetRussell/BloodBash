@@ -212,10 +212,16 @@ def load_json_dir(directory):
                     for item in data:
                         oid = item.get('ObjectIdentifier')
                         if not oid:
+                            # If no ObjectIdentifier, it's likely a relationship-only file
+                            # Don't add as node, but keep the data for later edge processing
+                            if 'start' in item and 'end' in item:
+                                nodes[f"rel_{len(nodes)}"] = item  # temporary key
                             continue
-                        if 'ObjectType' not in item:
-                            item = item.copy()
+                        if 'ObjectType' not in item and 'Type' not in item:
                             item['ObjectType'] = obj_type
+                        props = item.get('Properties', {})
+                        if 'type' in props and props['type']:
+                            item['ObjectType'] = props['type']
                         nodes[oid] = item
             except Exception as e:
                 console.print(f"[yellow]Warning: Failed to parse {filename}: {e}[/yellow]")
@@ -223,21 +229,38 @@ def load_json_dir(directory):
     console.print(f"[green]✓ Loaded {len(nodes)} objects from {len(files)} files[/green]")
     return nodes
 
+
 def build_graph(nodes):
     G = nx.MultiDiGraph()
     name_to_oid = {}
-
+    relationship_edges = []
+    placeholder_counter = 0
     with tqdm(total=len(nodes), desc="Building graph", unit="node") as pbar:
         for oid, node in nodes.items():
-            props = node.get('Properties', {}) or {}
+            props = node.get('Properties', {}).copy()
+            # Corrected property keys (fixed spelling for EDITF_ATTRIBUTESUBJECTALTNAME2)
+            for key in ['EnrolleeSuppliesSubject', 'RequiresManagerApproval', 
+                        'EDITF_ATTRIBUTESUBJECTALTNAME2', 'enrolleesuppliessubject', 
+                        'requiresmanagerapproval', 'editf_attributesubjectaltname2']:
+                if key in node:
+                    props[key] = node[key]
             name = props.get('name') or props.get('Name') or oid
-            name = name.upper().split('@')[0]
-
-            obj_type = (node.get('ObjectType') or node.get('Type') or 'Unknown').capitalize()
-            G.add_node(oid, name=name, type=obj_type, props=props)
-            name_to_oid[name] = oid
-
-            # Relationships
+            name_norm = name.upper().split('@')[0]
+            obj_type = (
+                node.get('ObjectType') or node.get('Type') or props.get('type') or 'Unknown'
+            ).capitalize()
+            if not oid.startswith('rel_'):
+                G.add_node(oid, name=name, type=obj_type, props=props)
+                name_to_oid[name_norm] = oid
+            data_items = node.get('data', []) if 'data' in node else []
+            if not isinstance(data_items, list):
+                data_items = [data_items] if data_items else []
+            for rel in data_items:
+                start = rel.get('start')
+                end = rel.get('end')
+                label = rel.get('label')
+                if start and end and label:
+                    relationship_edges.append((start, end, label))
             for key in ['MemberOf', 'AdminTo', 'HasSession', 'AllowedToAct', 'HasSIDHistory']:
                 rels = node.get(key, [])
                 if not isinstance(rels, list):
@@ -246,8 +269,6 @@ def build_graph(nodes):
                     target = rel.get('ObjectIdentifier') if isinstance(rel, dict) else rel
                     if target and target in nodes:
                         G.add_edge(oid, target, label=key)
-
-            # ACLs
             aces = node.get('Aces', [])
             for ace in aces:
                 principal = ace.get('PrincipalSID') or ace.get('PrincipalObjectIdentifier')
@@ -255,7 +276,43 @@ def build_graph(nodes):
                 if principal and right and principal in nodes:
                     G.add_edge(principal, oid, label=right)
             pbar.update(1)
-
+    console.print("[cyan]Processing standalone relationships...[/cyan]")
+    added = 0
+    placeholders_added = 0
+    for start, end, label in relationship_edges:
+        start_norm = start.upper().split('@')[0]
+        end_norm = end.upper().split('@')[0]
+        start_oid = None
+        if start in G.nodes:
+            start_oid = start
+        elif start_norm in name_to_oid:
+            start_oid = name_to_oid[start_norm]
+        else:
+            start_oid = f"placeholder_{placeholder_counter}"
+            placeholder_counter += 1
+            G.add_node(start_oid, name=start, type='Unknown', props={})
+            name_to_oid[start_norm] = start_oid
+            placeholders_added += 1
+            console.print(f"[dim]Created placeholder node for start: {start} (OID: {start_oid})[/dim]")
+        end_oid = None
+        if end in G.nodes:
+            end_oid = end
+        elif end_norm in name_to_oid:
+            end_oid = name_to_oid[end_norm]
+        else:
+            end_oid = f"placeholder_{placeholder_counter}"
+            placeholder_counter += 1
+            G.add_node(end_oid, name=end, type='Unknown', props={})
+            name_to_oid[end_norm] = end_oid
+            placeholders_added += 1
+            console.print(f"[dim]Created placeholder node for end: {end} (OID: {end_oid})[/dim]")
+        if start_oid and end_oid:
+            G.add_edge(start_oid, end_oid, label=label)
+            added += 1
+            console.print(f"[dim]Added edge: {start_oid} --[{label}]--> {end_oid}[/dim]")
+        else:
+            console.print(f"[yellow]Skipped relationship {start} -> {end} ({label}): unexpected error[/yellow]")
+    console.print(f"[green]Added {added} relationship edges ({placeholders_added} placeholder nodes created)[/green]")
     console.print(f"[green]✓ Graph built: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges[/green]")
     return G, name_to_oid
 
@@ -318,58 +375,111 @@ def format_path(G, path):
     return " ".join(parts)
 
 # ────────────────────────────────────────────────
-# ADCS ESC1–ESC8
+# ADCS ESC1–ESC8 (PATCHED VERSION)
 # ────────────────────────────────────────────────
 def print_adcs_vulnerabilities(G):
     console.rule("[bold magenta]ADCS ESC Vulnerabilities (ESC1–ESC8)[/bold magenta]")
     found = False
-
+    
+    def get_bool_prop(props, keys, default=False):
+        for key in keys:
+            val = props.get(key.lower(), props.get(key, None))
+            if val is not None:
+                return bool(val)
+        return default
+    
     for n, d in G.nodes(data=True):
-        if d['type'] not in ['Certificate Template', 'Enterprise CA', 'NTAuth Store']:
+        obj_type = d.get('type', 'Unknown').lower()
+        if obj_type not in ['certificate template', 'enterprise ca', 'root ca', 'ntauth store']:
             continue
-
-        name = d['name']
-        incoming = G.in_edges(n, data=True)
-        rights = {d['label'] for _, _, d in incoming}
-
-        # ESC1 / ESC2
-        if 'Certificate Template' in d['type']:
-            props = d['props']
-            if 'Enroll' in rights and (
-                'ENROLLEE_SUPPLIES_SUBJECT' in props.get('flags', []) or
-                not props.get('requiresmanagerapproval', False)
-            ):
+        name = d.get('name') or d.get('props', {}).get('name', n)
+        props = d.get('props', {}) or {}
+        # Copy top-level flags to props (corrected key spelling)
+        for key in ['EDITF_ATTRIBUTESUBJECTALTNAME2', 'EDITF_ATTRIBUTESUBJECTALTNAME2']:
+            if key in d and key not in props:
+                props[key] = d[key]
+        incoming = list(G.in_edges(n, data=True))
+        rights = {edge_data['label'] for _, _, edge_data in incoming}
+        
+        # Corrected defaults: RequiresManagerApproval defaults to False (permissive AD CS)
+        enrollee_supplies = get_bool_prop(props, ['enrolleesuppliessubject', 'EnrolleeSuppliesSubject'])
+        requires_mgr_approval = get_bool_prop(props, ['requiresmanagerapproval', 'RequiresManagerApproval'], default=False)
+        no_approval = not requires_mgr_approval
+        editf_san2 = get_bool_prop(props, ['editf_attributesubjectaltname2', 'EDITF_ATTRIBUTESUBJECTALTNAME2'])
+        
+        # EKUs for ESC5/7 (placeholders; not in test data)
+        ekus = props.get('ekus', []) or props.get('mspki-certificate-application-policy', [])
+        has_cert_request_agent = '1.3.6.1.4.1.311.20.2.1' in ekus
+        has_web_server = '1.3.6.1.5.5.7.3.1' in ekus
+        
+        # ESC1/2
+        if obj_type == 'certificate template':
+            if 'Enroll' in rights and enrollee_supplies and no_approval:
                 found = True
-                console.print(f"[red]ESC1/ESC2[/red]: [bold cyan]{name}[/bold cyan] (Enroll + weak config)")
+                console.print(f"[red]ESC1/ESC2[/red]: [bold cyan]{name}[/bold cyan] (Enroll + EnrolleeSuppliesSubject + no approval)")
                 for u, _, edge in incoming:
                     if edge['label'] == 'Enroll':
                         console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
-
+        
         # ESC3
-        if 'Certificate Template' in d['type'] and not d['props'].get('requiresmanagerapproval', False):
+        if obj_type == 'certificate template' and no_approval:
             dangerous = {'GenericAll', 'WriteDacl', 'WriteOwner', 'GenericWrite'}
-            if any(r in rights for r in dangerous):
+            dangerous_found = dangerous & rights
+            if dangerous_found:
                 found = True
                 console.print(f"[red]ESC3[/red]: [bold cyan]{name}[/bold cyan] (no approval + dangerous rights)")
                 for u, _, edge in incoming:
-                    if edge['label'] in dangerous:
+                    if edge['label'] in dangerous_found:
                         console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edge['label']}]-->")
-
-        # ESC6
-        if 'Enterprise CA' in d['type'] and 'EDITF_ATTRIBUTESUBJECALTNAME2' in d['props'].get('flags', []):
-            if 'Enroll' in rights:
+        
+        # ESC4
+        if obj_type in ['certificate template', 'enterprise ca', 'root ca']:
+            dangerous = {'GenericAll', 'WriteDacl', 'WriteOwner', 'GenericWrite'}
+            dangerous_found = dangerous & rights
+            if dangerous_found:
                 found = True
-                console.print(f"[red]ESC6[/red]: [bold cyan]{name}[/bold cyan] (EDITF_ATTRIBUTESUBJECALTNAME2 + Enroll)")
-
+                console.print(f"[red]ESC4[/red]: [bold cyan]{name}[/bold cyan] (dangerous rights on PKI object)")
+                for u, _, edge in incoming:
+                    if edge['label'] in dangerous_found:
+                        console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edge['label']}]-->")
+        
+        # ESC5 (placeholder)
+        if obj_type == 'certificate template' and has_cert_request_agent:
+            found = True
+            console.print(f"[red]ESC5[/red]: [bold cyan]{name}[/bold cyan] (Certificate Request Agent EKU)")
+            for u, _, edge in incoming:
+                if edge['label'] == 'Enroll':
+                    console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
+        
+        # ESC6 (fixed: checks Enroll on CA)
+        if obj_type == 'enterprise ca' and editf_san2 and 'Enroll' in rights:
+            found = True
+            console.print(f"[red]ESC6[/red]: [bold cyan]{name}[/bold cyan] (EDITF_ATTRIBUTESUBJECTALTNAME2 + Enroll)")
+            for u, _, edge in incoming:
+                if edge['label'] == 'Enroll':
+                    console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
+        
+        # ESC7 (placeholder)
+        if obj_type == 'certificate template' and has_web_server:
+            found = True
+            console.print(f"[red]ESC7[/red]: [bold cyan]{name}[/bold cyan] (HTTP Certificate - Web Server EKU)")
+            for u, _, edge in incoming:
+                if edge['label'] == 'Enroll':
+                    console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
+        
         # ESC8
-        if 'NTAuth Store' in d['type'] and 'GenericAll' in rights:
+        if obj_type == 'ntauth store' and 'GenericAll' in rights:
             found = True
             console.print(f"[red]ESC8[/red]: [bold cyan]{name}[/bold cyan] (GenericAll on NTAuth)")
-
+            for u, _, edge in incoming:
+                if edge['label'] == 'GenericAll':
+                    console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[GenericAll]-->")
+    
     if found:
         print_abuse_panel("ESC1-ESC8 (AD CS)")
     else:
         console.print("[green]No obvious ESC1–ESC8 misconfigurations detected[/green]")
+        console.print("[yellow]Note: If no edges/rights are shown above, the relationships are not connected in the graph (likely ObjectIdentifier mismatch).[/yellow]")
 
 # ────────────────────────────────────────────────
 # GPO Abuse
@@ -377,22 +487,40 @@ def print_adcs_vulnerabilities(G):
 def print_gpo_abuse(G):
     console.rule("[bold magenta]GPO Abuse Risks[/bold magenta]")
     found = False
-
+    high_value_keywords = ['domain controllers', 'domain admins', 'enterprise admins', 'administrators', 'dc']
+    
     for n, d in G.nodes(data=True):
-        if d['type'] != 'GPO':
+        # Fix: Case-insensitive type check to handle 'Gpo' or 'gpo'
+        if d['type'].lower() != 'gpo':
             continue
         name = d['name']
-        incoming = G.in_edges(n, data=True)
-        rights = {d['label'] for _, _, d in incoming}
-
-        dangerous = {'GenericAll', 'WriteDacl', 'WriteOwner', 'GenericWrite'}
-        if any(r in rights for r in dangerous):
+        incoming = list(G.in_edges(n, data=True))
+        rights = {edge_data['label'].lower() for _, _, edge_data in incoming}  # Case-insensitive rights
+        dangerous = {'genericall', 'writedacl', 'writeowner', 'genericwrite'}
+        dangerous_found = dangerous & rights
+        
+        if dangerous_found:
+            # Check for high-risk scope: Look for GPO links to high-value OUs
+            is_high_risk = False
+            linked_ous = []
+            # Traverse outgoing edges for links (e.g., 'GpLink')
+            for _, target, edge_data in G.out_edges(n, data=True):
+                if edge_data.get('label', '').lower() in ['gplink', 'linkedto']:  # Adjust if needed
+                    ou_name = G.nodes[target].get('name', '').lower()
+                    linked_ous.append(ou_name)
+                    if any(kw in ou_name for kw in high_value_keywords):
+                        is_high_risk = True
+            
             found = True
-            console.print(f"[yellow]Weak GPO[/yellow]: [bold cyan]{name}[/bold cyan]")
+            risk_color = "[red]" if is_high_risk else "[yellow]"
+            scope_note = f" (High-risk: Linked to {', '.join(linked_ous)})" if linked_ous else " (No links detected - low risk)"
+            console.print(f"{risk_color}Weak GPO{risk_color}: [bold cyan]{name}[/bold cyan]{scope_note}")
             for u, _, edge in incoming:
-                if edge['label'] in dangerous:
-                    console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edge['label']}]-->")
-
+                label_lower = edge['label'].lower()
+                if label_lower in dangerous:
+                    principal_name = G.nodes[u]['name']
+                    console.print(f"  → [green]{principal_name}[/green] --[{edge['label']}]-->")
+    
     if found:
         print_abuse_panel("GPO Abuse")
     else:
@@ -401,28 +529,52 @@ def print_gpo_abuse(G):
 # ────────────────────────────────────────────────
 # DCSync / Replication Rights
 # ────────────────────────────────────────────────
-def print_dcsync_rights(G):
-    console.rule("[bold magenta]DCSync / Replication Rights[/bold magenta]")
+def print_gpo_abuse(G):
+    console.rule("[bold magenta]GPO Abuse Risks[/bold magenta]")
     found = False
-
-    domain_oids = [n for n, d in G.nodes(data=True) if d['type'] == 'Domain']
-    if not domain_oids:
-        console.print("[yellow]No domain objects found[/yellow]")
-        return
-
-    dangerous_rights = {'GetChangesAll', 'Replicating Directory Changes All', 'Replicating Directory Changes In Filtered Set'}
+    high_value_keywords = ['domain controllers', 'domain admins', 'enterprise admins', 'administrators', 'dc']
     
-    for domain_oid in domain_oids:
-        incoming = G.in_edges(domain_oid, data=True)
-        for u, _, d in incoming:
-            if d['label'] in dangerous_rights:
-                found = True
-                console.print(f"[red]DCSync possible[/red]: [green]{G.nodes[u]['name']}[/green] --[{d['label']}]--> Domain")
-
+    for n, d in G.nodes(data=True):
+        # Case-insensitive type check
+        if d['type'].lower() != 'gpo':
+            continue
+        name = d['name']
+        incoming = list(G.in_edges(n, data=True))
+        console.print(f"[dim]Debug: Processing GPO {name} with {len(incoming)} incoming edges[/dim]")
+        if incoming:
+            console.print(f"[dim]Debug: Edges: {[(G.nodes[u]['name'], edge['label']) for u, _, edge in incoming]}[/dim]")
+        rights = {edge_data['label'].lower() for _, _, edge_data in incoming}
+        dangerous = {'genericall', 'writedacl', 'writeowner', 'genericwrite'}
+        dangerous_found = dangerous & rights
+        console.print(f"[dim]Debug: Rights found: {rights}, Dangerous: {dangerous_found}[/dim]")
+        
+        if dangerous_found:
+            # Check for high-risk scope
+            is_high_risk = False
+            linked_ous = []
+            out_edges = list(G.out_edges(n, data=True))
+            console.print(f"[dim]Debug: Outgoing edges for {name}: {[(G.nodes[target]['name'], edge['label']) for _, target, edge in out_edges]}[/dim]")
+            for _, target, edge_data in out_edges:
+                if edge_data.get('label', '').lower() in ['gplink', 'linkedto']:
+                    ou_name = G.nodes[target].get('name', '').lower()
+                    linked_ous.append(ou_name)
+                    if any(kw in ou_name for kw in high_value_keywords):
+                        is_high_risk = True
+            
+            found = True
+            risk_color = "[red]" if is_high_risk else "[yellow]"
+            scope_note = f" (High-risk: Linked to {', '.join(linked_ous)})" if linked_ous else " (No links detected - low risk)"
+            console.print(f"{risk_color}Weak GPO{risk_color}: [bold cyan]{name}[/bold cyan]{scope_note}")
+            for u, _, edge in incoming:
+                label_lower = edge['label'].lower()
+                if label_lower in dangerous:
+                    principal_name = G.nodes[u]['name']
+                    console.print(f"  → [green]{principal_name}[/green] --[{edge['label']}]-->")
+    
     if found:
-        print_abuse_panel("DCSync")
+        print_abuse_panel("GPO Abuse")
     else:
-        console.print("[green]No DCSync rights detected[/green]")
+        console.print("[green]No dangerous GPO rights found[/green]")
 
 # ────────────────────────────────────────────────
 # RBCD

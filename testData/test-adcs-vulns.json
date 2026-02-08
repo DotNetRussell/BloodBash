@@ -1,0 +1,81 @@
+{
+  "meta": {
+    "version": 6,
+    "type": "all"
+  },
+  "data": [
+    {
+      "ObjectIdentifier": "ESC1-TEMPLATE@LAB.LOCAL",
+      "Properties": {
+        "name": "ESC1-Vulnerable-Template",
+        "type": "Certificate Template",
+        "objectid": "ESC1-TEMPLATE@LAB.LOCAL",
+        "enrolleesuppliessubject": true,
+        "requiresmanagerapproval": false,
+        "flags": ["ENROLLEE_SUPPLIES_SUBJECT"]
+      }
+    },
+    {
+      "ObjectIdentifier": "ESC3-TEMPLATE@LAB.LOCAL",
+      "Properties": {
+        "name": "ESC3-Vulnerable-Template",
+        "type": "Certificate Template",
+        "objectid": "ESC3-TEMPLATE@LAB.LOCAL",
+        "requiresmanagerapproval": false
+      }
+    },
+    {
+      "ObjectIdentifier": "VULN-CA@LAB.LOCAL",
+      "Properties": {
+        "name": "Vulnerable-Enterprise-CA",
+        "type": "Enterprise CA",
+        "objectid": "VULN-CA@LAB.LOCAL",
+        "flags": ["EDITF_ATTRIBUTESUBJECALTNAME2"]
+      }
+    },
+    {
+      "ObjectIdentifier": "NTAuth@LAB.LOCAL",
+      "Properties": {
+        "name": "NTAuthCertificates",
+        "type": "NTAuth Store",
+        "objectid": "NTAuth@LAB.LOCAL"
+      }
+    },
+    {
+      "ObjectIdentifier": "LOWPRIV@LAB.LOCAL",
+      "Properties": {
+        "name": "lowpriv.user@lab.local",
+        "type": "User"
+      }
+    },
+    {
+      "ObjectIdentifier": "DA@LAB.LOCAL",
+      "Properties": {
+        "name": "DOMAIN ADMINS@LAB.LOCAL",
+        "type": "Group"
+      }
+    }
+  ],
+  "acls": [
+    {
+      "start": "LOWPRIV@LAB.LOCAL",
+      "end": "ESC1-TEMPLATE@LAB.LOCAL",
+      "label": "Enroll"
+    },
+    {
+      "start": "DA@LAB.LOCAL",
+      "end": "ESC3-TEMPLATE@LAB.LOCAL",
+      "label": "GenericAll"
+    },
+    {
+      "start": "LOWPRIV@LAB.LOCAL",
+      "end": "VULN-CA@LAB.LOCAL",
+      "label": "Enroll"
+    },
+    {
+      "start": "LOWPRIV@LAB.LOCAL",
+      "end": "NTAuth@LAB.LOCAL",
+      "label": "GenericAll"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+    "meta": {
+      "version": 6,
+      "type": "ous"
+    },
+    "data": [
+      {
+        "ObjectIdentifier": "OU=Domain Controllers,DC=lab,DC=local",
+        "Properties": {
+          "name": "Domain Controllers",
+          "type": "OU",
+          "objectid": "OU=Domain Controllers,..."
+        }
+      },
+      {
+        "ObjectIdentifier": "OU=Users,DC=lab,DC=local",
+        "Properties": {
+          "name": "Users",
+          "type": "OU",
+          "objectid": "OU=Users,..."
+        }
+      }
+    ]
+  }
