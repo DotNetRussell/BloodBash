@@ -200,7 +200,7 @@ def load_json_dir(directory):
         for filename in files:
             path = os.path.join(directory, filename)
             try:
-                with open(path, 'r', encoding='utf-8') as f:
+                with open(path, 'r', encoding='utf-8-sig') as f:
                     raw = json.load(f)
                     meta_type = raw.get("meta", {}).get("type", "").lower()
                     obj_type = TYPE_FROM_META.get(meta_type, "Unknown")
@@ -295,7 +295,7 @@ def get_high_value_targets(G):
     keywords = [
         'domain admins', 'enterprise admins', 'schema admins', 'administrators',
         'krbtgt', 'domain controllers', 'dnsadmins', 'enterprise key admins',
-        'certificate template', 'enterprise ca', 'root ca', 'ntauth',
+        'certificate template', 'enterprise ca', 'root ca', 'ntauth','dc'
     ]
     targets = []
     for n, d in G.nodes(data=True):
