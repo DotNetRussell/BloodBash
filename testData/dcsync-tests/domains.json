@@ -1,0 +1,16 @@
+{
+    "meta": {
+      "version": 6,
+      "type": "domains"
+    },
+    "data": [
+      {
+        "ObjectIdentifier": "DC=lab,DC=local",
+        "Properties": {
+          "name": "LAB.LOCAL",
+          "type": "Domain",
+          "objectid": "DC=lab,DC=local"
+        }
+      }
+    ]
+  }

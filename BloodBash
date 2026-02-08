@@ -539,20 +539,22 @@ def print_gpo_abuse(G):
 def print_dcsync_rights(G):
     console.rule("[bold magenta]DCSync / Replication Rights[/bold magenta]")
     found = False
-
     domain_oids = [n for n, d in G.nodes(data=True) if d['type'] == 'Domain']
     if not domain_oids:
         console.print("[yellow]No domain objects found[/yellow]")
         return
-
-    dangerous_rights = {'GetChangesAll', 'Replicating Directory Changes All', 'Replicating Directory Changes In Filtered Set'}
+    dangerous_rights = {'getchangesall', 'replicating directory changes all', 'replicating directory changes in filtered set'}  # Case-insensitive
+    
     for domain_oid in domain_oids:
+        domain_name = G.nodes[domain_oid]['name']
         incoming = G.in_edges(domain_oid, data=True)
         for u, _, d in incoming:
-            if d['label'] in dangerous_rights:
+            label_lower = d['label'].lower()
+            if label_lower in dangerous_rights:
                 found = True
-                console.print(f"[red]DCSync possible[/red]: [green]{G.nodes[u]['name']}[/green] --[{d['label']}]--> Domain")
-
+                principal_name = G.nodes[u]['name']
+                console.print(f"[red]DCSync possible[/red]: [green]{principal_name}[/green] --[{d['label']}]--> [cyan]{domain_name}[/cyan] (Domain)")
+    
     if found:
         print_abuse_panel("DCSync")
     else:
@@ -565,17 +567,21 @@ def print_dcsync_rights(G):
 def print_rbcd(G):
     console.rule("[bold magenta]Resource-Based Constrained Delegation (RBCD)[/bold magenta]")
     found = False
-
+    
     for n, d in G.nodes(data=True):
         if d['type'] != 'Computer':
             continue
-        props = d['props']
-        if props.get('msds-allowedtodelegateto', []):
+        props = d.get('props', {})
+        allowed_to_delegate = props.get('msds-allowedtodelegateto', [])
+        if not isinstance(allowed_to_delegate, list):
+            allowed_to_delegate = [allowed_to_delegate] if allowed_to_delegate else []
+        
+        if allowed_to_delegate:
             found = True
-            console.print(f"  • [bold cyan]{d['name']}[/bold cyan] allows delegation from:")
-            for tgt in props['msds-allowedtodelegateto']:
-                console.print(f"      - {tgt}")
-
+            console.print(f"[yellow]RBCD configured[/yellow]: [bold cyan]{d['name']}[/bold cyan] allows delegation from:")
+            for tgt in allowed_to_delegate:
+                console.print(f"  → [green]{tgt}[/green]")
+    
     if found:
         print_abuse_panel("RBCD")
     else:
