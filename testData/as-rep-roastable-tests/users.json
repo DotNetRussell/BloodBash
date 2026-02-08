@@ -1,0 +1,34 @@
+{
+    "meta": {"version": 6, "type": "users"},
+    "data": [
+      {
+        "ObjectIdentifier": "S-1-5-21-...-1000",
+        "Properties": {
+          "name": "ASREPUSER@LAB.LOCAL",
+          "type": "User",
+          "enabled": true,
+          "dontReqPreauth": true,
+          "sensitive": false
+        }
+      },
+      {
+        "ObjectIdentifier": "S-1-5-21-...-1001",
+        "Properties": {
+          "name": "NORMALUSER@LAB.LOCAL",
+          "type": "User",
+          "enabled": true,
+          "dontReqPreauth": false
+        }
+      },
+      {
+        "ObjectIdentifier": "S-1-5-21-...-1002",
+        "Properties": {
+          "name": "SENSITIVEUSER@LAB.LOCAL",
+          "type": "User",
+          "enabled": true,
+          "dontReqPreauth": true,
+          "sensitive": true
+        }
+      }
+    ]
+  }

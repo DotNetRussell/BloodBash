@@ -1,0 +1,21 @@
+{
+    "meta": {"version": 6, "type": "users"},
+    "data": [
+      {
+        "ObjectIdentifier": "S-1-5-21-...-1000",
+        "Properties": {
+          "name": "ADMINUSER@LAB.LOCAL",
+          "type": "User",
+          "enabled": true
+        }
+      },
+      {
+        "ObjectIdentifier": "S-1-5-21-...-1001",
+        "Properties": {
+          "name": "DOMAINADMIN@LAB.LOCAL",
+          "type": "User",
+          "enabled": true
+        }
+      }
+    ]
+  }

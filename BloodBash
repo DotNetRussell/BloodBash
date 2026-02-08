@@ -681,14 +681,28 @@ def print_dangerous_permissions(G):
 def print_kerberoastable(G):
     console.rule("[bold magenta]Kerberoastable Accounts[/bold magenta]")
     found = False
+    count = 0
+    max_display = 20  # Limit output to avoid overwhelm
     for n, d in G.nodes(data=True):
-        if d['type'] != 'User':
+        if d['type'].lower() != 'user':  # Case-insensitive type check
             continue
         props = d.get('props', {})
-        if props.get('hasspn', False) and not props.get('sensitive', False) and props.get('enabled', True):
+        # Case-insensitive property checks with variants
+        hasspn = props.get('hasspn', props.get('hasSPN', props.get('has_spn', False)))
+        sensitive = props.get('sensitive', props.get('Sensitive', False))
+        enabled = props.get('enabled', props.get('Enabled', True))
+        if hasspn and not sensitive and enabled:
             found = True
             console.print(f"  • [cyan]{d['name']}[/cyan]")
-
+            count += 1
+            if count >= max_display:
+                remaining = sum(1 for _ in G.nodes(data=True) if _.get('type', '').lower() == 'user' and 
+                                _.get('props', {}).get('hasspn', _.get('props', {}).get('hasSPN', False)) and 
+                                not _.get('props', {}).get('sensitive', False) and 
+                                _.get('props', {}).get('enabled', True)) - max_display
+                if remaining > 0:
+                    console.print(f"  [dim]... and {remaining} more[/dim]")
+                break
     if found:
         print_abuse_panel("Kerberoastable")
     else:
@@ -697,14 +711,28 @@ def print_kerberoastable(G):
 def print_as_rep_roastable(G):
     console.rule("[bold magenta]AS-REP Roastable Accounts (DONT_REQ_PREAUTH)[/bold magenta]")
     found = False
+    count = 0
+    max_display = 20  # Limit output to avoid overwhelm
     for n, d in G.nodes(data=True):
-        if d['type'] != 'User':
+        if d['type'].lower() != 'user':  # Case-insensitive type check
             continue
         props = d.get('props', {})
-        if props.get('dontreqpreauth', False) and props.get('enabled', True):
+        # Case-insensitive property checks with variants
+        dontreqpreauth = props.get('dontreqpreauth', props.get('dontReqPreauth', props.get('dont_req_preauth', False)))
+        sensitive = props.get('sensitive', props.get('Sensitive', False))
+        enabled = props.get('enabled', props.get('Enabled', True))
+        if dontreqpreauth and not sensitive and enabled:
             found = True
             console.print(f"  • [cyan]{d['name']}[/cyan]")
-
+            count += 1
+            if count >= max_display:
+                remaining = sum(1 for _ in G.nodes(data=True) if _.get('type', '').lower() == 'user' and 
+                                _.get('props', {}).get('dontreqpreauth', _.get('props', {}).get('dontReqPreauth', False)) and 
+                                not _.get('props', {}).get('sensitive', False) and 
+                                _.get('props', {}).get('enabled', True)) - max_display
+                if remaining > 0:
+                    console.print(f"  [dim]... and {remaining} more[/dim]")
+                break
     if found:
         print_abuse_panel("AS-REP Roastable")
     else:
@@ -715,25 +743,29 @@ def print_as_rep_roastable(G):
 # ────────────────────────────────────────────────
 def print_sessions_localadmin(G):
     console.rule("[bold magenta]Session / LocalAdmin Summary[/bold magenta]")
-    computers = [n for n, d in G.nodes(data=True) if d['type'] == 'Computer']
+    computers = [n for n, d in G.nodes(data=True) if d['type'].lower() == 'computer']  # Case-insensitive type check
     if not computers:
         console.print("[yellow]No computers with session data[/yellow]")
         return
-
     table = Table(title="Top Local Admins", show_header=True, header_style="bold magenta")
     table.add_column("Principal", style="cyan")
     table.add_column("Count", justify="right")
     table.add_column("Examples", style="green")
-
     from collections import Counter
-    admin_edges = [e for e in G.edges(data=True) if e[2].get('label') == 'LocalAdmin']
+    # Filter edges: label == 'LocalAdmin' and target (v) is a Computer
+    admin_edges = [(u, v, d) for u, v, d in G.edges(data=True) if d.get('label') == 'LocalAdmin' and v in computers and u in G.nodes and v in G.nodes]
     counts = Counter(u for u, _, _ in admin_edges)
     
+    if not counts:
+        console.print("[green]No LocalAdmin rights found[/green]")
+        return
+    
     for principal, count in counts.most_common(10):
-        examples = [G.nodes[v]['name'] for _, v, d in admin_edges if u == principal][:3]
+        examples = [G.nodes[v]['name'] for pu, v, _ in admin_edges if pu == principal][:3]
         table.add_row(G.nodes[principal]['name'], str(count), ", ".join(examples))
-
     console.print(table)
+    total_admins = sum(counts.values())
+    console.print(f"[dim]Total LocalAdmin instances: {total_admins} on {len(computers)} computers[/dim]")
 
 # ────────────────────────────────────────────────
 # Export
