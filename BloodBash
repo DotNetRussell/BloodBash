@@ -252,6 +252,10 @@ def build_graph(nodes):
             if not oid.startswith('rel_'):
                 G.add_node(oid, name=name, type=obj_type, props=props)
                 name_to_oid[name_norm] = oid
+            # Handle temp rel nodes directly
+            elif 'start' in node and 'end' in node and 'label' in node:
+                relationship_edges.append((node['start'], node['end'], node['label']))
+            # Existing data_items for regular nodes
             data_items = node.get('data', []) if 'data' in node else []
             if not isinstance(data_items, list):
                 data_items = [data_items] if data_items else []
@@ -490,7 +494,7 @@ def print_gpo_abuse(G):
     high_value_keywords = ['domain controllers', 'domain admins', 'enterprise admins', 'administrators', 'dc']
     
     for n, d in G.nodes(data=True):
-        # Fix: Case-insensitive type check to handle 'Gpo' or 'gpo'
+        # Case-insensitive type check
         if d['type'].lower() != 'gpo':
             continue
         name = d['name']
@@ -529,52 +533,31 @@ def print_gpo_abuse(G):
 # ────────────────────────────────────────────────
 # DCSync / Replication Rights
 # ────────────────────────────────────────────────
-def print_gpo_abuse(G):
-    console.rule("[bold magenta]GPO Abuse Risks[/bold magenta]")
+# ────────────────────────────────────────────────
+# DCSync / Replication Rights
+# ────────────────────────────────────────────────
+def print_dcsync_rights(G):
+    console.rule("[bold magenta]DCSync / Replication Rights[/bold magenta]")
     found = False
-    high_value_keywords = ['domain controllers', 'domain admins', 'enterprise admins', 'administrators', 'dc']
-    
-    for n, d in G.nodes(data=True):
-        # Case-insensitive type check
-        if d['type'].lower() != 'gpo':
-            continue
-        name = d['name']
-        incoming = list(G.in_edges(n, data=True))
-        console.print(f"[dim]Debug: Processing GPO {name} with {len(incoming)} incoming edges[/dim]")
-        if incoming:
-            console.print(f"[dim]Debug: Edges: {[(G.nodes[u]['name'], edge['label']) for u, _, edge in incoming]}[/dim]")
-        rights = {edge_data['label'].lower() for _, _, edge_data in incoming}
-        dangerous = {'genericall', 'writedacl', 'writeowner', 'genericwrite'}
-        dangerous_found = dangerous & rights
-        console.print(f"[dim]Debug: Rights found: {rights}, Dangerous: {dangerous_found}[/dim]")
-        
-        if dangerous_found:
-            # Check for high-risk scope
-            is_high_risk = False
-            linked_ous = []
-            out_edges = list(G.out_edges(n, data=True))
-            console.print(f"[dim]Debug: Outgoing edges for {name}: {[(G.nodes[target]['name'], edge['label']) for _, target, edge in out_edges]}[/dim]")
-            for _, target, edge_data in out_edges:
-                if edge_data.get('label', '').lower() in ['gplink', 'linkedto']:
-                    ou_name = G.nodes[target].get('name', '').lower()
-                    linked_ous.append(ou_name)
-                    if any(kw in ou_name for kw in high_value_keywords):
-                        is_high_risk = True
-            
-            found = True
-            risk_color = "[red]" if is_high_risk else "[yellow]"
-            scope_note = f" (High-risk: Linked to {', '.join(linked_ous)})" if linked_ous else " (No links detected - low risk)"
-            console.print(f"{risk_color}Weak GPO{risk_color}: [bold cyan]{name}[/bold cyan]{scope_note}")
-            for u, _, edge in incoming:
-                label_lower = edge['label'].lower()
-                if label_lower in dangerous:
-                    principal_name = G.nodes[u]['name']
-                    console.print(f"  → [green]{principal_name}[/green] --[{edge['label']}]-->")
-    
+
+    domain_oids = [n for n, d in G.nodes(data=True) if d['type'] == 'Domain']
+    if not domain_oids:
+        console.print("[yellow]No domain objects found[/yellow]")
+        return
+
+    dangerous_rights = {'GetChangesAll', 'Replicating Directory Changes All', 'Replicating Directory Changes In Filtered Set'}
+    for domain_oid in domain_oids:
+        incoming = G.in_edges(domain_oid, data=True)
+        for u, _, d in incoming:
+            if d['label'] in dangerous_rights:
+                found = True
+                console.print(f"[red]DCSync possible[/red]: [green]{G.nodes[u]['name']}[/green] --[{d['label']}]--> Domain")
+
     if found:
-        print_abuse_panel("GPO Abuse")
+        print_abuse_panel("DCSync")
     else:
-        console.print("[green]No dangerous GPO rights found[/green]")
+        console.print("[green]No DCSync rights detected[/green]")
+
 
 # ────────────────────────────────────────────────
 # RBCD
