@@ -367,8 +367,10 @@ def get_high_value_targets(G):
     return sorted(targets, key=lambda x: x[1])
 
 def format_path(G, path):
-    if len(path) < 2:
-        return G.nodes[path[0]]['name']
+    if not path or len(path) < 1:
+        return "[dim]Invalid path[/dim]"
+    if len(path) == 1:
+        return f"[bold cyan]{G.nodes[path[0]]['name']}[/bold cyan] (self)"
     parts = []
     for i in range(len(path)-1):
         u, v = path[i], path[i+1]
@@ -590,19 +592,24 @@ def print_rbcd(G):
 # ────────────────────────────────────────────────
 # Shortest Paths
 # ────────────────────────────────────────────────
-def print_shortest_paths(G, max_paths=5, target_filter=None):
+def print_shortest_paths(G, fast=False, max_paths=10, target_filter=None):
     console.rule("[bold magenta]Shortest Paths to High-Value Targets[/bold magenta]")
-    users = [n for n, d in G.nodes(data=True) if d['type'] == 'User']
+    users = [n for n, d in G.nodes(data=True) if d['type'].lower() == 'user']  # Case-insensitive
     targets = get_high_value_targets(G)
-
     if target_filter:
-        targets = [t for t in targets if target_filter.lower() in t[1].lower()]
-
+        targets = [t for t in targets if target_filter.lower() in t[1].lower()]  # Partial, case-insensitive match
     if not targets:
-        console.print("[yellow]No high-value targets found[/yellow]")
+        console.print("[yellow]No high-value targets found (or none match filter)[/yellow]")
         return
-
-    for tid, tname, ttype in targets[:5]:
+    if not users:
+        console.print("[yellow]No user objects found for path calculation[/yellow]")
+        return
+    
+    if fast:
+        console.print("[yellow]Fast mode enabled: Skipping shortest path computation[/yellow]")
+        return
+    
+    for tid, tname, ttype in targets[:5]:  # Limit targets to 5 for brevity
         console.print(f"\n[bold]Target:[/bold] [bold cyan]{tname}[/bold cyan] ({ttype})")
         count = 0
         for source in users:
@@ -610,14 +617,21 @@ def print_shortest_paths(G, max_paths=5, target_filter=None):
                 continue
             try:
                 path = nx.shortest_path(G, source, tid)
-                console.print(f"  [dim]→[/dim] {format_path(G, path)}")
+                path_length = len(path) - 1  # Edges in path
+                formatted_path = format_path(G, path)
+                console.print(f"  [dim]→[/dim] (Length: {path_length}) {formatted_path}")
                 count += 1
                 if count >= max_paths:
                     break
             except nx.NetworkXNoPath:
-                pass
+                continue  # Skip silently; handled below
         if count == 0:
-            console.print("    [dim]No paths found[/dim]")
+            # Check for connectivity issues
+            connected_users = [u for u in users if nx.has_path(G, u, tid)]
+            if not connected_users:
+                console.print("    [dim]No paths found: Target may be disconnected from users[/dim]")
+            else:
+                console.print("    [dim]No paths found within limit[/dim]")
 
 # ────────────────────────────────────────────────
 # Dangerous Permissions
@@ -790,8 +804,7 @@ def main():
         print_verbose_summary(G)
 
     if args.shortest_paths or run_all:
-        if not args.fast:
-            print_shortest_paths(G)
+        print_shortest_paths(G, fast=args.fast)
 
     if args.dangerous_permissions or run_all:
         print_dangerous_permissions(G)

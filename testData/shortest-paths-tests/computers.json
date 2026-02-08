@@ -1,0 +1,16 @@
+{
+    "meta": {
+      "version": 6,
+      "type": "computers"
+    },
+    "data": [
+      {
+        "ObjectIdentifier": "CN=DC1,OU=Domain Controllers,DC=lab,DC=local",
+        "Properties": {
+          "name": "DC1$",
+          "type": "Computer",
+          "objectid": "CN=DC1,..."
+        }
+      }
+    ]
+  }

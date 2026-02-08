@@ -1,0 +1,24 @@
+{
+    "meta": {
+      "version": 6,
+      "type": "users"
+    },
+    "data": [
+      {
+        "ObjectIdentifier": "S-1-5-21-...-1000",
+        "Properties": {
+          "name": "LOWPRIV@LAB.LOCAL",
+          "type": "User",
+          "enabled": true
+        }
+      },
+      {
+        "ObjectIdentifier": "S-1-5-21-...-1001",
+        "Properties": {
+          "name": "USER2@LAB.LOCAL",
+          "type": "User",
+          "enabled": true
+        }
+      }
+    ]
+  }

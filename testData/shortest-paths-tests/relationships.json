@@ -1,0 +1,23 @@
+{
+    "meta": {
+      "version": 6,
+      "type": "relationships"
+    },
+    "data": [
+      {
+        "start": "S-1-5-21-...-1000",
+        "end": "S-1-5-21-...-512",
+        "label": "MemberOf"
+      },
+      {
+        "start": "S-1-5-21-...-512",
+        "end": "S-1-5-21-...-1002",
+        "label": "AdminTo"
+      },
+      {
+        "start": "S-1-5-21-...-1001",
+        "end": "CN=DC1,OU=Domain Controllers,DC=lab,DC=local",
+        "label": "AdminTo"
+      }
+    ]
+  }
