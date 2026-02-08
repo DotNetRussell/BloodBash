@@ -1,6 +1,8 @@
+![BloodBash verbose output example](https://i.imgur.com/m5RVnJZ.png)
 
 # BloodBash 🩸#️
 ![Run Unit Tests](https://github.com/dotnetrussell/bloodbash/actions/workflows/run-tests.yml/badge.svg)
+
 **BloodBash** is a powerful, standalone BloodHound JSON analyzer written in Python.  
 It parses SharpHound (v6+) JSON files offline — no Neo4j or BloodHound GUI needed.
 It builds a directed graph using `networkx`, correctly identifies object types, finds attack paths, detects vulnerabilities (especially ADCS ESC1–ESC8), and provides BloodHound-style queries with rich, colored output.
