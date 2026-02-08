@@ -1,0 +1,25 @@
+{
+    "meta": {
+      "type": "users",
+      "count": 2
+    },
+    "data": [
+      {
+        "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-1001",
+        "ObjectType": "User",
+        "Properties": {
+          "name": "TESTUSER@LAB.LOCAL",
+          "domain": "lab.local",
+          "enabled": true
+        }
+      },
+      {
+        "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-1002",
+        "ObjectType": "Computer",
+        "Properties": {
+          "name": "TESTPC$",
+          "domain": "lab.local"
+        }
+      }
+    ]
+  }

@@ -12,10 +12,48 @@ from rich.progress import Progress
 from rich import print as rprint
 from tqdm import tqdm
 import time
+import csv  # For CSV export
+import sqlite3  # For database persistence
+from html import escape  # For HTML export
 
-__version__ = "1.0.0" 
-
+__version__ = "1.1.0"  # Updated version for enhancements
 console = Console()
+
+# ────────────────────────────────────────────────
+# Severity Scoring (for prioritization)
+# ────────────────────────────────────────────────
+SEVERITY_SCORES = {
+    "ESC1-ESC8": 10,  # High impact, privilege escalation
+    "DCSync": 10,
+    "RBCD": 9,
+    "Dangerous Permissions": 9,
+    "SID History Abuse": 8,
+    "GPO Abuse": 7,
+    "Kerberoastable": 5,
+    "AS-REP Roastable": 5,
+    "Shortest Paths": 6,  # Depends on length
+}
+global_findings = []  # List of (score, category, details) for prioritization
+
+def add_finding(category, details, score=None):
+    if score is None:
+        score = SEVERITY_SCORES.get(category, 5)
+    global_findings.append((score, category, details))
+
+def print_prioritized_findings():
+    if not global_findings:
+        return
+    console.rule("[bold magenta]Prioritized Findings by Severity[/bold magenta]")
+    sorted_findings = sorted(global_findings, key=lambda x: x[0], reverse=True)
+    table = Table(title="Findings Summary", show_header=True, header_style="bold red")
+    table.add_column("Severity Score", style="red", justify="right")
+    table.add_column("Category", style="cyan")
+    table.add_column("Details", style="yellow")
+    for score, cat, det in sorted_findings[:20]:  # Top 20
+        table.add_row(str(score), cat, det)
+    console.print(table)
+    if len(sorted_findings) > 20:
+        console.print(f"[dim]... and {len(sorted_findings) - 20} more[/dim]")
 
 # ────────────────────────────────────────────────
 # Intro Banner
@@ -26,31 +64,27 @@ def print_intro_banner(mode_str):
     console.print(Panel(
         f"""
 Parses SharpHound JSON files → finds AD attack paths & misconfigurations
-
 What it shows:
 • High-value targets (admins, krbtgt, CAs, templates, NTAuth...)
 • AD CS misconfigs (ESC1–ESC8)
-• Dangerous ACLs & permissions
+• Dangerous ACLs & permissions (direct & indirect via groups)
 • DCSync / replication rights
 • RBCD opportunities
+• SID history abuse
 • Kerberoastable & AS-REP roastable accounts
 • Weak GPO rights
-• Shortest paths to high-value targets (optional)
+• Shortest paths to high-value targets (direct & indirect)
 • Local admin / session summary (when data exists)
-
 Abuse suggestions: Shown once per vulnerable category (when found)
 Common tools: Certipy, Impacket, Rubeus, Mimikatz, SharpGPOAbuse, etc.
-
 Mode: [cyan]{mode_str}[/cyan]
 For authorized security testing / red teaming only.
-
 Use --help for all options.
 """,
         title="Quick Overview",
         border_style="bright_blue",
         padding=(1, 2)
     ))
-
     console.print("[bold]Color guide:[/bold]")
     console.print("  [red]Red[/red]          = Critical findings (ESCs, DCSync, dangerous rights)")
     console.print("  [yellow]Yellow[/yellow]       = Medium risk (weak GPOs, roastable accounts)")
@@ -58,7 +92,6 @@ Use --help for all options.
     console.print("  [cyan]Cyan[/cyan]         = Object names, targets, templates, types, counts")
     console.print("  [magenta]Magenta[/magenta]      = Section headers & dividers only")
     console.print("  [dim]Dim[/dim]          = Minor notes or empty results\n")
-
 
 # ────────────────────────────────────────────────
 # Type Mapping (SharpHound v6+)
@@ -85,32 +118,24 @@ def print_abuse_panel(vuln_type: str):
     title = f"Abuse Suggestions: {vuln_type}"
     content = ""
     border = "red"
-
     if vuln_type == "ESC1-ESC8 (AD CS)":
         content = """
 [bold red]Impact:[/bold red] Certificate-based privilege escalation (ESC1–ESC8) → impersonate users (often admins/DA), relay attacks, or obtain high-value certificates.
-
 Common tools: Certipy[](https://github.com/ly4k/Certipy), ntlmrelayx.py (Impacket)
-
 ESC1/ESC2/ESC6 examples:
 certipy req -u lowpriv@domain.local -p 'Password!' -ca 'DOMAIN-CA' \\
     -template VulnerableTemplate -upn administrator@domain.local
-
 ESC8 (NTAuth relay):
 ntlmrelayx.py -t https://ca.domain.local/certsrv/certfnsh.asp --adcs --template VulnerableTemplate -smb2support
-
 Warning: Requires network access to CA/DC + low-priv creds. Authorized testing only.
 """
     elif vuln_type == "DCSync":
         content = """
 [bold red]Impact:[/bold red] Dump NTDS hashes (krbtgt, admins, etc.) → Golden Ticket, pass-the-hash, domain compromise.
-
 Tools: Mimikatz or Impacket secretsdump
-
 Mimikatz:
 lsadump::dcsync /domain:domain.local /user:krbtgt
 lsadump::dcsync /domain:domain.local /all /csv
-
 Impacket:
 secretsdump.py domain/user:password@dc-ip -just-dc
 secretsdump.py -just-dc-ntds domain/user:password@dc-ip
@@ -118,75 +143,61 @@ secretsdump.py -just-dc-ntds domain/user:password@dc-ip
     elif vuln_type == "GPO Abuse":
         content = """
 [bold yellow]Impact:[/bold yellow] Modify GPO → deploy malicious scheduled tasks/scripts → code execution / priv esc on affected machines.
-
 Tools: SharpGPOAbuse, pyGPOAbuse, PowerView
-
 SharpGPOAbuse example:
 SharpGPOAbuse.exe --gponame "VulnerableGPO" --computer "target$" --taskname "EvilTask" --task "powershell.exe -c evil.ps1"
-
 PowerView:
 New-GPOImmediateTask -TaskName "Backdoor" -Command "powershell.exe ..."
 """
     elif vuln_type == "Dangerous Permissions":
         content = """
 [bold red]Impact:[/bold red] Varies by right — ResetPassword → account takeover; GenericAll → full control; WriteDacl → own object.
-
 Common abuses:
-
 - Reset/ForceChangePassword:
   net user target NewPass123! /domain
-
 - GenericAll on user/group:
   Add yourself or reset password
-
 - WriteDacl:
   Grant self GenericAll then proceed
-
 Warning: Requires control of the principal with the dangerous right.
 """
     elif vuln_type == "Kerberoastable":
         content = """
 [bold yellow]Impact:[/bold yellow] Request TGS → offline crack weak service account password.
-
 Tool: Impacket
-
 GetUserSPNs.py -request -outputfile hashes.txt domain/user:password@domain.local
-
 Crack:
 hashcat -m 13100 hashes.txt wordlist.txt
 """
     elif vuln_type == "AS-REP Roastable":
         content = """
 [bold yellow]Impact:[/bold yellow] Request AS-REP without preauth → offline crack user hash.
-
 Tools: Rubeus or Impacket
-
 Rubeus:
 Rubeus.exe asreproast /format:hashcat /outfile:hashes.txt
-
 Impacket:
 GetNPUsers.py domain/ -usersfile users.txt -format hashcat -dc-ip dc-ip
-
 Crack (mode 18200):
 hashcat -m 18200 hashes.asreproast wordlist.txt
 """
     elif vuln_type == "RBCD":
         content = """
 [bold red]Impact:[/bold red] Resource-Based Constrained Delegation → S4U2Self/S4U2Proxy impersonation.
-
 Tool: Impacket rbcd.py
-
 rbcd.py -delegate-from 'attacker$' -delegate-to 'target$' \\
     -action write -dc-ip dc-ip domain/user:password
-
 Then use getST.py or Rubeus s4u.
 """
-
+    elif vuln_type == "SID History Abuse":
+        content = """
+[bold yellow]Impact:[/bold yellow] If a user has SID history from a privileged group, they may retain rights.
+Tool: Check with PowerView or manually verify.
+Abuse: Use Mimikatz to extract SID history and impersonate.
+"""
     if content:
         console.print(Panel(content, title=title, border_style=border))
     else:
         console.print(f"[dim]No abuse example defined for {vuln_type}[/dim]")
-
 
 # ────────────────────────────────────────────────
 # Loading & Graph Building
@@ -204,11 +215,9 @@ def load_json_dir(directory):
                     raw = json.load(f)
                     meta_type = raw.get("meta", {}).get("type", "").lower()
                     obj_type = TYPE_FROM_META.get(meta_type, "Unknown")
-
                     data = raw.get('data') or raw.get('Results') or raw.get('objects') or raw
                     if not isinstance(data, list):
                         data = [data]
-
                     for item in data:
                         oid = item.get('ObjectIdentifier')
                         if not oid:
@@ -229,8 +238,7 @@ def load_json_dir(directory):
     console.print(f"[green]✓ Loaded {len(nodes)} objects from {len(files)} files[/green]")
     return nodes
 
-
-def build_graph(nodes):
+def build_graph(nodes, db_path=None):
     G = nx.MultiDiGraph()
     name_to_oid = {}
     relationship_edges = []
@@ -317,18 +325,51 @@ def build_graph(nodes):
             console.print(f"[yellow]Skipped relationship {start} -> {end} ({label}): unexpected error[/yellow]")
     console.print(f"[green]Added {added} relationship edges ({placeholders_added} placeholder nodes created)[/green]")
     console.print(f"[green]✓ Graph built: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges[/green]")
+    # Save to DB if specified
+    if db_path:
+        save_graph_to_db(G, db_path)
+    return G, name_to_oid
+
+def save_graph_to_db(G, db_path):
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS nodes (oid TEXT PRIMARY KEY, name TEXT, type TEXT, props TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS edges (start_oid TEXT, end_oid TEXT, label TEXT)''')
+    for n, d in G.nodes(data=True):
+        c.execute("INSERT OR REPLACE INTO nodes VALUES (?, ?, ?, ?)", (n, d['name'], d['type'], json.dumps(d['props'])))
+    for u, v, d in G.edges(data=True):
+        c.execute("INSERT INTO edges VALUES (?, ?, ?)", (u, v, d['label']))
+    conn.commit()
+    conn.close()
+    console.print(f"[green]Graph saved to DB: {db_path}[/green]")
+
+def load_graph_from_db(db_path):
+    G = nx.MultiDiGraph()
+    name_to_oid = {}
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    c.execute("SELECT oid, name, type, props FROM nodes")
+    for oid, name, typ, props in c.fetchall():
+        G.add_node(oid, name=name, type=typ, props=json.loads(props))
+        name_to_oid[name.upper().split('@')[0]] = oid
+    c.execute("SELECT start_oid, end_oid, label FROM edges")
+    for u, v, label in c.fetchall():
+        G.add_edge(u, v, label=label)
+    conn.close()
+    console.print(f"[green]Graph loaded from DB: {db_path}[/green]")
     return G, name_to_oid
 
 # ────────────────────────────────────────────────
 # VERBOSE SUMMARY
 # ────────────────────────────────────────────────
-def print_verbose_summary(G):
+def print_verbose_summary(G, domain_filter=None):
     console.rule("[bold magenta]VERBOSE SUMMARY[/bold magenta]")
     
     types_count = defaultdict(int)
     for _, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
         types_count[d['type']] += 1
-
     table = Table(title="Object Types", show_header=True, header_style="bold cyan")
     table.add_column("Type", style="green")
     table.add_column("Count", justify="right", style="yellow")
@@ -337,8 +378,7 @@ def print_verbose_summary(G):
         table.add_row(t, str(cnt))
     
     console.print(table)
-
-    users = [d['name'] for _, d in G.nodes(data=True) if d['type'] == 'User']
+    users = [d['name'] for _, d in G.nodes(data=True) if d['type'] == 'User' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]
     if users:
         console.print(f"\n[bold cyan]Users ({len(users)}):[/bold cyan]")
         for name in sorted(users)[:len(users)]:
@@ -349,7 +389,7 @@ def print_verbose_summary(G):
 # ────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────
-def get_high_value_targets(G):
+def get_high_value_targets(G, domain_filter=None):
     keywords = [
         'domain admins', 'enterprise admins', 'schema admins', 'administrators',
         'krbtgt', 'domain controllers', 'dnsadmins', 'enterprise key admins',
@@ -357,6 +397,8 @@ def get_high_value_targets(G):
     ]
     targets = []
     for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
         name = d['name'].lower()
         typ = d['type'].lower()
         if any(k in name for k in keywords) or 'ca' in typ or 'template' in typ or 'ntauth' in typ:
@@ -377,10 +419,48 @@ def format_path(G, path):
     parts.append(f"[bold red]{G.nodes[path[-1]]['name']}[/bold red]")
     return " ".join(parts)
 
+def get_indirect_paths(G, source, target, max_depth=5):
+    # Simple BFS to find indirect paths through groups
+    paths = []
+    try:
+        for path in nx.all_simple_paths(G, source, target, cutoff=max_depth):
+            if len(path) > 2:  # At least one intermediate
+                paths.append(path)
+        return paths[:5]  # Limit
+    except nx.NetworkXNoPath:
+        return []
+
+# ────────────────────────────────────────────────
+# SID History Abuse
+# ────────────────────────────────────────────────
+def print_sid_history_abuse(G, domain_filter=None):
+    console.rule("[bold magenta]SID History Abuse[/bold magenta]")
+    found = False
+    high_priv_groups = {'domain admins', 'enterprise admins', 'administrators', 'schema admins'}
+    
+    for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
+        if d['type'].lower() != 'user':
+            continue
+        outgoing = list(G.out_edges(n, data=True))  # Check outgoing edges instead of incoming
+        for u, v, edge_data in outgoing:
+            if 'label' in edge_data and edge_data['label'].lower() == 'hassidhistory':
+                group_name = G.nodes[v]['name'].lower()
+                if any(hp in group_name for hp in high_priv_groups):
+                    found = True
+                    console.print(f"[yellow]SID History potential[/yellow]: [green]{d['name']}[/green] has SID history from [cyan]{G.nodes[v]['name']}[/cyan]")
+                    add_finding("SID History Abuse", f"{d['name']} has SID history from {G.nodes[v]['name']}")
+    
+    if found:
+        print_abuse_panel("SID History Abuse")
+    else:
+        console.print("[green]No obvious SID history abuse detected[/green]")
+
 # ────────────────────────────────────────────────
 # ADCS ESC1–ESC8 (PATCHED VERSION)
 # ────────────────────────────────────────────────
-def print_adcs_vulnerabilities(G):
+def print_adcs_vulnerabilities(G, domain_filter=None):
     console.rule("[bold magenta]ADCS ESC Vulnerabilities (ESC1–ESC8)[/bold magenta]")
     found = False
     
@@ -392,6 +472,8 @@ def print_adcs_vulnerabilities(G):
         return default
     
     for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
         obj_type = d.get('type', 'Unknown').lower()
         if obj_type not in ['certificate template', 'enterprise ca', 'root ca', 'ntauth store']:
             continue
@@ -422,6 +504,7 @@ def print_adcs_vulnerabilities(G):
                 for u, _, edge in incoming:
                     if edge['label'] == 'Enroll':
                         console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
+                add_finding("ESC1-ESC8", f"ESC1/2 on {name}")
         
         # ESC3
         if obj_type == 'certificate template' and no_approval:
@@ -433,6 +516,7 @@ def print_adcs_vulnerabilities(G):
                 for u, _, edge in incoming:
                     if edge['label'] in dangerous_found:
                         console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edge['label']}]-->")
+                add_finding("ESC1-ESC8", f"ESC3 on {name}")
         
         # ESC4
         if obj_type in ['certificate template', 'enterprise ca', 'root ca']:
@@ -444,6 +528,7 @@ def print_adcs_vulnerabilities(G):
                 for u, _, edge in incoming:
                     if edge['label'] in dangerous_found:
                         console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edge['label']}]-->")
+                add_finding("ESC1-ESC8", f"ESC4 on {name}")
         
         # ESC5 (placeholder)
         if obj_type == 'certificate template' and has_cert_request_agent:
@@ -452,6 +537,7 @@ def print_adcs_vulnerabilities(G):
             for u, _, edge in incoming:
                 if edge['label'] == 'Enroll':
                     console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
+            add_finding("ESC1-ESC8", f"ESC5 on {name}")
         
         # ESC6 (fixed: checks Enroll on CA)
         if obj_type == 'enterprise ca' and editf_san2 and 'Enroll' in rights:
@@ -460,6 +546,7 @@ def print_adcs_vulnerabilities(G):
             for u, _, edge in incoming:
                 if edge['label'] == 'Enroll':
                     console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
+            add_finding("ESC1-ESC8", f"ESC6 on {name}")
         
         # ESC7 (placeholder)
         if obj_type == 'certificate template' and has_web_server:
@@ -468,6 +555,7 @@ def print_adcs_vulnerabilities(G):
             for u, _, edge in incoming:
                 if edge['label'] == 'Enroll':
                     console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
+            add_finding("ESC1-ESC8", f"ESC7 on {name}")
         
         # ESC8
         if obj_type == 'ntauth store' and 'GenericAll' in rights:
@@ -476,6 +564,7 @@ def print_adcs_vulnerabilities(G):
             for u, _, edge in incoming:
                 if edge['label'] == 'GenericAll':
                     console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[GenericAll]-->")
+            add_finding("ESC1-ESC8", f"ESC8 on {name}")
     
     if found:
         print_abuse_panel("ESC1-ESC8 (AD CS)")
@@ -486,12 +575,14 @@ def print_adcs_vulnerabilities(G):
 # ────────────────────────────────────────────────
 # GPO Abuse
 # ────────────────────────────────────────────────
-def print_gpo_abuse(G):
+def print_gpo_abuse(G, domain_filter=None):
     console.rule("[bold magenta]GPO Abuse Risks[/bold magenta]")
     found = False
     high_value_keywords = ['domain controllers', 'domain admins', 'enterprise admins', 'administrators', 'dc']
     
     for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
         # Case-insensitive type check
         if d['type'].lower() != 'gpo':
             continue
@@ -522,6 +613,7 @@ def print_gpo_abuse(G):
                 if label_lower in dangerous:
                     principal_name = G.nodes[u]['name']
                     console.print(f"  → [green]{principal_name}[/green] --[{edge['label']}]-->")
+            add_finding("GPO Abuse", f"Weak GPO: {name}{scope_note}")
     
     if found:
         print_abuse_panel("GPO Abuse")
@@ -531,10 +623,10 @@ def print_gpo_abuse(G):
 # ────────────────────────────────────────────────
 # DCSync / Replication Rights
 # ────────────────────────────────────────────────
-def print_dcsync_rights(G):
+def print_dcsync_rights(G, domain_filter=None):
     console.rule("[bold magenta]DCSync / Replication Rights[/bold magenta]")
     found = False
-    domain_oids = [n for n, d in G.nodes(data=True) if d['type'] == 'Domain']
+    domain_oids = [n for n, d in G.nodes(data=True) if d['type'] == 'Domain' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]
     if not domain_oids:
         console.print("[yellow]No domain objects found[/yellow]")
         return
@@ -549,21 +641,23 @@ def print_dcsync_rights(G):
                 found = True
                 principal_name = G.nodes[u]['name']
                 console.print(f"[red]DCSync possible[/red]: [green]{principal_name}[/green] --[{d['label']}]--> [cyan]{domain_name}[/cyan] (Domain)")
+                add_finding("DCSync", f"{principal_name} can DCSync on {domain_name}")
     
     if found:
         print_abuse_panel("DCSync")
     else:
         console.print("[green]No DCSync rights detected[/green]")
 
-
 # ────────────────────────────────────────────────
 # RBCD
 # ────────────────────────────────────────────────
-def print_rbcd(G):
+def print_rbcd(G, domain_filter=None):
     console.rule("[bold magenta]Resource-Based Constrained Delegation (RBCD)[/bold magenta]")
     found = False
     
     for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
         if d['type'] != 'Computer':
             continue
         props = d.get('props', {})
@@ -576,6 +670,7 @@ def print_rbcd(G):
             console.print(f"[yellow]RBCD configured[/yellow]: [bold cyan]{d['name']}[/bold cyan] allows delegation from:")
             for tgt in allowed_to_delegate:
                 console.print(f"  → [green]{tgt}[/green]")
+            add_finding("RBCD", f"RBCD on {d['name']}")
     
     if found:
         print_abuse_panel("RBCD")
@@ -585,10 +680,10 @@ def print_rbcd(G):
 # ────────────────────────────────────────────────
 # Shortest Paths
 # ────────────────────────────────────────────────
-def print_shortest_paths(G, fast=False, max_paths=10, target_filter=None):
+def print_shortest_paths(G, fast=False, max_paths=10, target_filter=None, domain_filter=None, indirect=False):
     console.rule("[bold magenta]Shortest Paths to High-Value Targets[/bold magenta]")
-    users = [n for n, d in G.nodes(data=True) if d['type'].lower() == 'user']  # Case-insensitive
-    targets = get_high_value_targets(G)
+    users = [n for n, d in G.nodes(data=True) if d['type'].lower() == 'user' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]  # Case-insensitive
+    targets = get_high_value_targets(G, domain_filter)
     if target_filter:
         targets = [t for t in targets if target_filter.lower() in t[1].lower()]  # Partial, case-insensitive match
     if not targets:
@@ -618,25 +713,40 @@ def print_shortest_paths(G, fast=False, max_paths=10, target_filter=None):
                     break
             except nx.NetworkXNoPath:
                 continue  # Skip silently; handled below
-        if count == 0:
+        # Indirect paths if requested
+        if indirect:
+            console.print(f"  [dim]Indirect paths (via groups):[/dim]")
+            indirect_count = 0
+            for source in users:
+                paths = get_indirect_paths(G, source, tid)
+                for path in paths:
+                    formatted_path = format_path(G, path)
+                    console.print(f"    [dim]→[/dim] {formatted_path}")
+                    indirect_count += 1
+                    if indirect_count >= max_paths:
+                        break
+                if indirect_count >= max_paths:
+                    break
+        if count == 0 and not indirect:
             # Check for connectivity issues
             connected_users = [u for u in users if nx.has_path(G, u, tid)]
             if not connected_users:
                 console.print("    [dim]No paths found: Target may be disconnected from users[/dim]")
             else:
                 console.print("    [dim]No paths found within limit[/dim]")
+        add_finding("Shortest Paths", f"Paths to {tname}", score=6 if count > 0 else 0)
 
 # ────────────────────────────────────────────────
 # Dangerous Permissions
 # ────────────────────────────────────────────────
-def print_dangerous_permissions(G):
+def print_dangerous_permissions(G, domain_filter=None, indirect=False):
     console.rule("[bold magenta]Dangerous Permissions on High-Value Objects[/bold magenta]")
     dangerous_rights = {
         'genericall', 'owns', 'writedacl', 'writeowner', 'allextendedrights',
         'genericwrite', 'addmember', 'resetpassword', 'forcechangepassword',
         'manageca', 'managecertificates', 'enroll', 'certificateenroll', 'writeproperty'
     }  # Lowercase for case-insensitive matching
-    targets = get_high_value_targets(G)
+    targets = get_high_value_targets(G, domain_filter)
     found = False
     if not targets:
         console.print("[yellow]No high-value targets found[/yellow]")
@@ -645,7 +755,7 @@ def print_dangerous_permissions(G):
     for tid, tname, ttype in targets:
         incoming = G.in_edges(tid, data=True)
         dangerous_edges = [
-            (u, d['label']) for u, v, d in incoming if d['label'].lower() in dangerous_rights and u in G.nodes
+            (u, d['label']) for u, v, d in incoming if 'label' in d and d['label'].lower() in dangerous_rights and u in G.nodes
         ]
         if dangerous_edges:
             found = True
@@ -662,6 +772,21 @@ def print_dangerous_permissions(G):
                 extra = f" ... and {count - 5} more" if count > 5 else ""
                 console.print(f"  • [yellow]{right}[/yellow]: [green]{', '.join(principal_names)}{extra}[/green]")
             console.print(f"    [dim](Note: Only direct rights shown; indirect via groups not included)[/dim]")
+            add_finding("Dangerous Permissions", f"Dangerous rights on {tname}")
+    
+    # Indirect via groups if requested
+    if indirect:
+        console.print(f"\n[dim]Checking indirect dangerous permissions via groups...[/dim]")
+        for tid, tname, ttype in targets:
+            # Find groups that have dangerous rights, then users in those groups
+            for u, v, d in G.edges(data=True):
+                if v == tid and 'label' in d and d['label'].lower() in dangerous_rights:
+                    group_name = G.nodes[u]['name']
+                    if G.nodes[u]['type'].lower() == 'group':
+                        # Safe check for 'MemberOf' label in MultiDiGraph edge data
+                        members = [m for m in G.predecessors(u) if any(edge_data.get('label') == 'MemberOf' for edge_data in (G.get_edge_data(m, u) or {}).values())]
+                        if members:
+                            console.print(f"  [yellow]Indirect via group {group_name}[/yellow]: {', '.join([G.nodes[m]['name'] for m in members[:3]])}")
     
     if found:
         print_abuse_panel("Dangerous Permissions")
@@ -671,12 +796,14 @@ def print_dangerous_permissions(G):
 # ────────────────────────────────────────────────
 # Kerberoastable & AS-REP Roastable
 # ────────────────────────────────────────────────
-def print_kerberoastable(G):
+def print_kerberoastable(G, domain_filter=None):
     console.rule("[bold magenta]Kerberoastable Accounts[/bold magenta]")
     found = False
     count = 0
     max_display = 20  # Limit output to avoid overwhelm
     for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
         if d['type'].lower() != 'user':  # Case-insensitive type check
             continue
         props = d.get('props', {})
@@ -698,15 +825,18 @@ def print_kerberoastable(G):
                 break
     if found:
         print_abuse_panel("Kerberoastable")
+        add_finding("Kerberoastable", f"{count} accounts")
     else:
         console.print("[green]None found[/green]")
 
-def print_as_rep_roastable(G):
+def print_as_rep_roastable(G, domain_filter=None):
     console.rule("[bold magenta]AS-REP Roastable Accounts (DONT_REQ_PREAUTH)[/bold magenta]")
     found = False
     count = 0
     max_display = 20  # Limit output to avoid overwhelm
     for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
         if d['type'].lower() != 'user':  # Case-insensitive type check
             continue
         props = d.get('props', {})
@@ -728,15 +858,16 @@ def print_as_rep_roastable(G):
                 break
     if found:
         print_abuse_panel("AS-REP Roastable")
+        add_finding("AS-REP Roastable", f"{count} accounts")
     else:
         console.print("[green]None found[/green]")
 
 # ────────────────────────────────────────────────
 # Sessions / LocalAdmin
 # ────────────────────────────────────────────────
-def print_sessions_localadmin(G):
+def print_sessions_localadmin(G, domain_filter=None):
     console.rule("[bold magenta]Session / LocalAdmin Summary[/bold magenta]")
-    computers = [n for n, d in G.nodes(data=True) if d['type'].lower() == 'computer']  # Case-insensitive type check
+    computers = [n for n, d in G.nodes(data=True) if d['type'].lower() == 'computer' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]  # Case-insensitive type check
     if not computers:
         console.print("[yellow]No computers with session data[/yellow]")
         return
@@ -763,18 +894,18 @@ def print_sessions_localadmin(G):
 # ────────────────────────────────────────────────
 # Export
 # ────────────────────────────────────────────────
-def export_results(G, output_prefix="bashound", format_type="md"):
+def export_results(G, output_prefix="bashound", format_type="md", domain_filter=None):
     if format_type == "md":
         path = f"{output_prefix}.md"
         with open(path, "w", encoding="utf-8") as f:
             f.write("# BashHound Report\n\n")
             f.write("## High-Value Targets\n")
-            for _, name, typ in get_high_value_targets(G):
+            for _, name, typ in get_high_value_targets(G, domain_filter):
                 f.write(f"- {name} ({typ})\n")
             f.write("\n## Sample Paths\n")
-            
+            # Add sample paths
+            f.write("See console output for details.\n")
         console.print(f"[green]Exported Markdown:[/green] {path}")
-
     elif format_type == "json":
         path = f"{output_prefix}.json"
         summary = {
@@ -782,12 +913,47 @@ def export_results(G, output_prefix="bashound", format_type="md"):
             "edges": G.number_of_edges(),
             "high_value": [
                 {"name": d['name'], "type": d['type']} for _, d in G.nodes(data=True)
-                if any(k in d['name'].lower() for k in ['admin', 'krbtgt', 'ca', 'template'])
+                if any(k in d['name'].lower() for k in ['admin', 'krbtgt', 'ca', 'template']) and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)
             ]
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
         console.print(f"[green]Exported JSON:[/green] {path}")
+    elif format_type == "html":
+        path = f"{output_prefix}.html"
+        html = f"""<html><head><title>BashHound Report</title><style>
+        body {{ font-family: Arial; }}
+        .red {{ color: red; }}
+        .yellow {{ color: orange; }}
+        .green {{ color: green; }}
+        table {{ border-collapse: collapse; }}
+        th, td {{ border: 1px solid black; padding: 5px; }}
+        </style></head><body>
+        <h1>BashHound Report</h1>
+        <h2>High-Value Targets</h2><ul>"""
+        for _, name, typ in get_high_value_targets(G, domain_filter):
+            html += f"<li>{escape(name)} ({escape(typ)})</li>"
+        html += "</ul><h2>Prioritized Findings</h2><table><tr><th>Severity</th><th>Category</th><th>Details</th></tr>"
+        for score, cat, det in sorted(global_findings, key=lambda x: x[0], reverse=True):
+            html += f"<tr><td>{score}</td><td>{escape(cat)}</td><td>{escape(det)}</td></tr>"
+        html += "</table></body></html>"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(html)
+        console.print(f"[green]Exported HTML:[/green] {path}")
+    elif format_type == "csv":
+        path = f"{output_prefix}_sessions.csv"
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Principal", "Count", "Examples"])
+            # Example: Export sessions table
+            from collections import Counter
+            computers = [n for n, d in G.nodes(data=True) if d['type'].lower() == 'computer' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]
+            admin_edges = [(u, v, d) for u, v, d in G.edges(data=True) if d.get('label') == 'LocalAdmin' and v in computers]
+            counts = Counter(u for u, _, _ in admin_edges)
+            for principal, count in counts.most_common(10):
+                examples = [G.nodes[v]['name'] for pu, v, _ in admin_edges if pu == principal][:3]
+                writer.writerow([G.nodes[principal]['name'], count, ", ".join(examples)])
+        console.print(f"[green]Exported CSV:[/green] {path}")
 
 # ────────────────────────────────────────────────
 # Main
@@ -795,7 +961,6 @@ def export_results(G, output_prefix="bashound", format_type="md"):
 def main():
     parser = argparse.ArgumentParser(description="BloodBash - Advanced BloodHound Analyzer with Abuse Suggestions")
     parser.add_argument('directory', nargs='?', default='.', help='Path to SharpHound JSON files')
-
     parser.add_argument('--shortest-paths', action='store_true')
     parser.add_argument('--dangerous-permissions', action='store_true')
     parser.add_argument('--adcs', action='store_true')
@@ -805,71 +970,62 @@ def main():
     parser.add_argument('--sessions', action='store_true')
     parser.add_argument('--kerberoastable', action='store_true')
     parser.add_argument('--as-rep-roastable', action='store_true')
+    parser.add_argument('--sid-history', action='store_true')
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--all', action='store_true')
-    parser.add_argument('--export', nargs='?', const='md', choices=['md', 'json'], help='Export results')
+    parser.add_argument('--export', nargs='?', const='md', choices=['md', 'json', 'html', 'csv'], help='Export results')
     parser.add_argument('--fast', action='store_true', help='Fast mode (skip heavy pathfinding)')
-
+    parser.add_argument('--domain', help='Filter by domain')
+    parser.add_argument('--indirect', action='store_true', help='Include indirect paths/permissions')
+    parser.add_argument('--db', help='SQLite DB path for persistence (save/load graph)')
     args = parser.parse_args()
-
     start_time = time.time()
-
-    nodes = load_json_dir(args.directory)
-    if not nodes:
-        console.print("[red]No objects loaded. Exiting.[/red]")
-        sys.exit(1)
-
-    G, _ = build_graph(nodes)
-
+    if args.db and os.path.exists(args.db):
+        G, name_to_oid = load_graph_from_db(args.db)
+    else:
+        nodes = load_json_dir(args.directory)
+        if not nodes:
+            console.print("[red]No objects loaded. Exiting.[/red]")
+            sys.exit(1)
+        G, name_to_oid = build_graph(nodes, args.db if args.db else None)
     # Determine mode string for banner
     if args.all:
         mode_str = "Full analysis (--all)"
     elif any([args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse,
-              args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable]):
+              args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history]):
         mode_str = "Selected checks"
     else:
         mode_str = "Default (verbose summary + common checks)"
-
     print_intro_banner(mode_str)
-
     run_all = args.all or not any([
         args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse,
-        args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable
+        args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history
     ])
-
     if args.verbose or run_all:
-        print_verbose_summary(G)
-
+        print_verbose_summary(G, args.domain)
     if args.shortest_paths or run_all:
-        print_shortest_paths(G, fast=args.fast)
-
+        print_shortest_paths(G, fast=args.fast, domain_filter=args.domain, indirect=args.indirect)
     if args.dangerous_permissions or run_all:
-        print_dangerous_permissions(G)
-
+        print_dangerous_permissions(G, args.domain, args.indirect)
     if args.adcs or run_all:
-        print_adcs_vulnerabilities(G)
-
+        print_adcs_vulnerabilities(G, args.domain)
     if args.gpo_abuse or run_all:
-        print_gpo_abuse(G)
-
+        print_gpo_abuse(G, args.domain)
     if args.dcsync or run_all:
-        print_dcsync_rights(G)
-
+        print_dcsync_rights(G, args.domain)
     if args.rbcd or run_all:
-        print_rbcd(G)
-
+        print_rbcd(G, args.domain)
     if args.sessions or run_all:
-        print_sessions_localadmin(G)
-
+        print_sessions_localadmin(G, args.domain)
     if args.kerberoastable or run_all:
-        print_kerberoastable(G)
-
+        print_kerberoastable(G, args.domain)
     if args.as_rep_roastable or run_all:
-        print_as_rep_roastable(G)
-
+        print_as_rep_roastable(G, args.domain)
+    if args.sid_history or run_all:
+        print_sid_history_abuse(G, args.domain)
     if args.export:
-        export_results(G, format_type=args.export)
-
+        export_results(G, format_type=args.export, domain_filter=args.domain)
+    print_prioritized_findings()
     elapsed = time.time() - start_time
     console.print(f"\n[italic green]Completed in {elapsed:.2f} seconds[/italic green]")
 

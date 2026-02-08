@@ -1,0 +1,34 @@
+{
+    "meta": {
+      "type": "users",
+      "count": 3
+    },
+    "data": [
+      {
+        "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-1003",
+        "ObjectType": "User",
+        "Properties": {
+          "name": "USER1@LAB.LOCAL",
+          "domain": "lab.local",
+          "enabled": true
+        }
+      },
+      {
+        "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-1004",
+        "ObjectType": "User",
+        "Properties": {
+          "name": "USER2@OTHER.DOMAIN",
+          "domain": "other.domain",
+          "enabled": true
+        }
+      },
+      {
+        "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-514",
+        "ObjectType": "Group",
+        "Properties": {
+          "name": "DOMAIN ADMINS@LAB.LOCAL",
+          "domain": "lab.local"
+        }
+      }
+    ]
+  }

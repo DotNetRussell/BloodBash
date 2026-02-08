@@ -1,0 +1,44 @@
+{
+    "meta": {
+      "type": "groups",
+      "count": 2
+    },
+    "data": [
+      {
+        "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-517",
+        "ObjectType": "Group",
+        "Properties": {
+          "name": "PERMGROUP@LAB.LOCAL",
+          "domain": "lab.local"
+        }
+      },
+      {
+        "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-1006",
+        "ObjectType": "User",
+        "Properties": {
+          "name": "INDIRECTPERMUSER@LAB.LOCAL",
+          "domain": "lab.local",
+          "enabled": true
+        },
+        "MemberOf": [
+          {
+            "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-517"
+          }
+        ]
+      },
+      {
+        "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-518",
+        "ObjectType": "Group",
+        "Properties": {
+          "name": "DOMAIN ADMINS@LAB.LOCAL",
+          "domain": "lab.local"
+        },
+        "Aces": [
+          {
+            "PrincipalSID": "S-1-5-21-123456789-123456789-123456789-517",
+            "RightName": "GenericAll"
+          }
+        ]
+      }
+    ]
+  }

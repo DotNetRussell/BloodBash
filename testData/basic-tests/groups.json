@@ -1,0 +1,17 @@
+{
+    "meta": {
+      "type": "groups",
+      "count": 1
+    },
+    "data": [
+      {
+        "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-513",
+        "ObjectType": "Group",
+        "Properties": {
+          "name": "DOMAIN USERS@LAB.LOCAL",
+          "domain": "lab.local"
+        },
+        "MemberOf": []
+      }
+    ]
+  }
