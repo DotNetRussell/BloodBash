@@ -15,10 +15,8 @@ import time
 import csv  # For CSV export
 import sqlite3  # For database persistence
 from html import escape  # For HTML export
-
 __version__ = "1.1.0"  # Updated version for enhancements
 console = Console()
-
 # ────────────────────────────────────────────────
 # Severity Scoring (for prioritization)
 # ────────────────────────────────────────────────
@@ -34,12 +32,10 @@ SEVERITY_SCORES = {
     "Shortest Paths": 6,  # Depends on length
 }
 global_findings = []  # List of (score, category, details) for prioritization
-
 def add_finding(category, details, score=None):
     if score is None:
         score = SEVERITY_SCORES.get(category, 5)
     global_findings.append((score, category, details))
-
 def print_prioritized_findings():
     if not global_findings:
         return
@@ -54,7 +50,6 @@ def print_prioritized_findings():
     console.print(table)
     if len(sorted_findings) > 20:
         console.print(f"[dim]... and {len(sorted_findings) - 20} more[/dim]")
-
 # ────────────────────────────────────────────────
 # Intro Banner
 # ────────────────────────────────────────────────
@@ -92,7 +87,6 @@ Use --help for all options.
     console.print("  [cyan]Cyan[/cyan]         = Object names, targets, templates, types, counts")
     console.print("  [magenta]Magenta[/magenta]      = Section headers & dividers only")
     console.print("  [dim]Dim[/dim]          = Minor notes or empty results\n")
-
 # ────────────────────────────────────────────────
 # Type Mapping (SharpHound v6+)
 # ────────────────────────────────────────────────
@@ -110,7 +104,6 @@ TYPE_FROM_META = {
     "aiacas": "AIA CA",
     "ntauthstores": "NTAuth Store",
 }
-
 # ────────────────────────────────────────────────
 # Abuse Suggestions Helper
 # ────────────────────────────────────────────────
@@ -147,7 +140,7 @@ Tools: SharpGPOAbuse, pyGPOAbuse, PowerView
 SharpGPOAbuse example:
 SharpGPOAbuse.exe --gponame "VulnerableGPO" --computer "target$" --taskname "EvilTask" --task "powershell.exe -c evil.ps1"
 PowerView:
-New-GPOImmediateTask -TaskName "Backdoor" -Command "powershell.exe ..."
+New-GPOImmediateTask -TaskName="Backdoor" -Command="powershell.exe ..."
 """
     elif vuln_type == "Dangerous Permissions":
         content = """
@@ -198,14 +191,16 @@ Abuse: Use Mimikatz to extract SID history and impersonate.
         console.print(Panel(content, title=title, border_style=border))
     else:
         console.print(f"[dim]No abuse example defined for {vuln_type}[/dim]")
-
 # ────────────────────────────────────────────────
 # Loading & Graph Building
 # ────────────────────────────────────────────────
 def load_json_dir(directory):
     nodes = {}
-    files = [f for f in os.listdir(directory) if f.lower().endswith('.json')]
-    
+    try:
+        files = [f for f in os.listdir(directory) if f.lower().endswith('.json')]
+    except FileNotFoundError:
+        console.print(f"[yellow]Warning: Directory '{directory}' not found. Skipping.[/yellow]")
+        return nodes  # Return empty dict to avoid crash
     with Progress() as progress:
         task = progress.add_task("[cyan]Loading JSON files...", total=len(files))
         for filename in files:
@@ -237,7 +232,6 @@ def load_json_dir(directory):
             progress.advance(task)
     console.print(f"[green]✓ Loaded {len(nodes)} objects from {len(files)} files[/green]")
     return nodes
-
 def build_graph(nodes, db_path=None):
     G = nx.MultiDiGraph()
     name_to_oid = {}
@@ -246,8 +240,8 @@ def build_graph(nodes, db_path=None):
     with tqdm(total=len(nodes), desc="Building graph", unit="node") as pbar:
         for oid, node in nodes.items():
             props = node.get('Properties', {}).copy()
-            for key in ['EnrolleeSuppliesSubject', 'RequiresManagerApproval', 
-                        'EDITF_ATTRIBUTESUBJECTALTNAME2', 'enrolleesuppliessubject', 
+            for key in ['EnrolleeSuppliesSubject', 'RequiresManagerApproval',
+                        'EDITF_ATTRIBUTESUBJECTALTNAME2', 'enrolleesuppliessubject',
                         'requiresmanagerapproval', 'editf_attributesubjectaltname2']:
                 if key in node:
                     props[key] = node[key]
@@ -260,7 +254,7 @@ def build_graph(nodes, db_path=None):
                 G.add_node(oid, name=name, type=obj_type, props=props)
                 name_to_oid[name_norm] = oid
             # Handle temp rel nodes directly
-            elif 'start' in node and 'end' in node and 'label' in node:
+            if 'start' in node and 'end' in node and 'label' in node:
                 relationship_edges.append((node['start'], node['end'], node['label']))
             # Existing data_items for regular nodes
             data_items = node.get('data', []) if 'data' in node else []
@@ -329,7 +323,6 @@ def build_graph(nodes, db_path=None):
     if db_path:
         save_graph_to_db(G, db_path)
     return G, name_to_oid
-
 def save_graph_to_db(G, db_path):
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
@@ -342,7 +335,6 @@ def save_graph_to_db(G, db_path):
     conn.commit()
     conn.close()
     console.print(f"[green]Graph saved to DB: {db_path}[/green]")
-
 def load_graph_from_db(db_path):
     G = nx.MultiDiGraph()
     name_to_oid = {}
@@ -358,13 +350,11 @@ def load_graph_from_db(db_path):
     conn.close()
     console.print(f"[green]Graph loaded from DB: {db_path}[/green]")
     return G, name_to_oid
-
 # ────────────────────────────────────────────────
 # VERBOSE SUMMARY
 # ────────────────────────────────────────────────
 def print_verbose_summary(G, domain_filter=None):
     console.rule("[bold magenta]VERBOSE SUMMARY[/bold magenta]")
-    
     types_count = defaultdict(int)
     for _, d in G.nodes(data=True):
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
@@ -373,10 +363,8 @@ def print_verbose_summary(G, domain_filter=None):
     table = Table(title="Object Types", show_header=True, header_style="bold cyan")
     table.add_column("Type", style="green")
     table.add_column("Count", justify="right", style="yellow")
-    
     for t, cnt in sorted(types_count.items(), key=lambda x: x[1], reverse=True):
         table.add_row(t, str(cnt))
-    
     console.print(table)
     users = [d['name'] for _, d in G.nodes(data=True) if d['type'] == 'User' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]
     if users:
@@ -385,10 +373,18 @@ def print_verbose_summary(G, domain_filter=None):
             console.print(f"  • {name}")
     else:
         console.print("\n[yellow]No User objects found[/yellow]")
-
 # ────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────
+def get_bool_prop_ci(props, keys, default=False):
+    """Case-insensitive boolean property getter."""
+    if not isinstance(props, dict):
+        return default
+    for key in keys:
+        for p_key in props:
+            if p_key.lower() == key.lower():
+                return bool(props[p_key])
+    return default
 def get_high_value_targets(G, domain_filter=None):
     keywords = [
         'domain admins', 'enterprise admins', 'schema admins', 'administrators',
@@ -404,7 +400,6 @@ def get_high_value_targets(G, domain_filter=None):
         if any(k in name for k in keywords) or 'ca' in typ or 'template' in typ or 'ntauth' in typ:
             targets.append((n, d['name'], d['type']))
     return sorted(targets, key=lambda x: x[1])
-
 def format_path(G, path):
     if not path or len(path) < 1:
         return "[dim]Invalid path[/dim]"
@@ -418,7 +413,6 @@ def format_path(G, path):
         parts.append(f"[bold cyan]{G.nodes[u]['name']}[/bold cyan] --[[yellow]{label}[/yellow]]-->")
     parts.append(f"[bold red]{G.nodes[path[-1]]['name']}[/bold red]")
     return " ".join(parts)
-
 def get_indirect_paths(G, source, target, max_depth=5):
     # Simple BFS to find indirect paths through groups
     paths = []
@@ -429,7 +423,6 @@ def get_indirect_paths(G, source, target, max_depth=5):
         return paths[:5]  # Limit
     except nx.NetworkXNoPath:
         return []
-
 # ────────────────────────────────────────────────
 # SID History Abuse
 # ────────────────────────────────────────────────
@@ -437,7 +430,6 @@ def print_sid_history_abuse(G, domain_filter=None):
     console.rule("[bold magenta]SID History Abuse[/bold magenta]")
     found = False
     high_priv_groups = {'domain admins', 'enterprise admins', 'administrators', 'schema admins'}
-    
     for n, d in G.nodes(data=True):
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
@@ -451,26 +443,22 @@ def print_sid_history_abuse(G, domain_filter=None):
                     found = True
                     console.print(f"[yellow]SID History potential[/yellow]: [green]{d['name']}[/green] has SID history from [cyan]{G.nodes[v]['name']}[/cyan]")
                     add_finding("SID History Abuse", f"{d['name']} has SID history from {G.nodes[v]['name']}")
-    
     if found:
         print_abuse_panel("SID History Abuse")
     else:
         console.print("[green]No obvious SID history abuse detected[/green]")
-
 # ────────────────────────────────────────────────
 # ADCS ESC1–ESC8 (PATCHED VERSION)
 # ────────────────────────────────────────────────
 def print_adcs_vulnerabilities(G, domain_filter=None):
     console.rule("[bold magenta]ADCS ESC Vulnerabilities (ESC1–ESC8)[/bold magenta]")
     found = False
-    
     def get_bool_prop(props, keys, default=False):
         for key in keys:
             val = props.get(key.lower(), props.get(key, None))
             if val is not None:
                 return bool(val)
         return default
-    
     for n, d in G.nodes(data=True):
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
@@ -485,17 +473,14 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
                 props[key] = d[key]
         incoming = list(G.in_edges(n, data=True))
         rights = {edge_data['label'] for _, _, edge_data in incoming}
-        
         enrollee_supplies = get_bool_prop(props, ['enrolleesuppliessubject', 'EnrolleeSuppliesSubject'])
         requires_mgr_approval = get_bool_prop(props, ['requiresmanagerapproval', 'RequiresManagerApproval'], default=False)
         no_approval = not requires_mgr_approval
         editf_san2 = get_bool_prop(props, ['editf_attributesubjectaltname2', 'EDITF_ATTRIBUTESUBJECTALTNAME2'])
-        
         # EKUs for ESC5/7 (placeholders; not in test data)
         ekus = props.get('ekus', []) or props.get('mspki-certificate-application-policy', [])
         has_cert_request_agent = '1.3.6.1.4.1.311.20.2.1' in ekus
         has_web_server = '1.3.6.1.5.5.7.3.1' in ekus
-        
         # ESC1/2
         if obj_type == 'certificate template':
             if 'Enroll' in rights and enrollee_supplies and no_approval:
@@ -505,7 +490,6 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
                     if edge['label'] == 'Enroll':
                         console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
                 add_finding("ESC1-ESC8", f"ESC1/2 on {name}")
-        
         # ESC3
         if obj_type == 'certificate template' and no_approval:
             dangerous = {'GenericAll', 'WriteDacl', 'WriteOwner', 'GenericWrite'}
@@ -517,7 +501,6 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
                     if edge['label'] in dangerous_found:
                         console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edge['label']}]-->")
                 add_finding("ESC1-ESC8", f"ESC3 on {name}")
-        
         # ESC4
         if obj_type in ['certificate template', 'enterprise ca', 'root ca']:
             dangerous = {'GenericAll', 'WriteDacl', 'WriteOwner', 'GenericWrite'}
@@ -529,7 +512,6 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
                     if edge['label'] in dangerous_found:
                         console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edge['label']}]-->")
                 add_finding("ESC1-ESC8", f"ESC4 on {name}")
-        
         # ESC5 (placeholder)
         if obj_type == 'certificate template' and has_cert_request_agent:
             found = True
@@ -538,7 +520,6 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
                 if edge['label'] == 'Enroll':
                     console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
             add_finding("ESC1-ESC8", f"ESC5 on {name}")
-        
         # ESC6 (fixed: checks Enroll on CA)
         if obj_type == 'enterprise ca' and editf_san2 and 'Enroll' in rights:
             found = True
@@ -547,7 +528,6 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
                 if edge['label'] == 'Enroll':
                     console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
             add_finding("ESC1-ESC8", f"ESC6 on {name}")
-        
         # ESC7 (placeholder)
         if obj_type == 'certificate template' and has_web_server:
             found = True
@@ -556,7 +536,6 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
                 if edge['label'] == 'Enroll':
                     console.print(f"  → [green]{G.nodes[u]['name']}[/green] can Enroll")
             add_finding("ESC1-ESC8", f"ESC7 on {name}")
-        
         # ESC8
         if obj_type == 'ntauth store' and 'GenericAll' in rights:
             found = True
@@ -565,13 +544,11 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
                 if edge['label'] == 'GenericAll':
                     console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[GenericAll]-->")
             add_finding("ESC1-ESC8", f"ESC8 on {name}")
-    
     if found:
         print_abuse_panel("ESC1-ESC8 (AD CS)")
     else:
         console.print("[green]No obvious ESC1–ESC8 misconfigurations detected[/green]")
         console.print("[yellow]Note: If no edges/rights are shown above, the relationships are not connected in the graph (likely ObjectIdentifier mismatch).[/yellow]")
-
 # ────────────────────────────────────────────────
 # GPO Abuse
 # ────────────────────────────────────────────────
@@ -579,7 +556,6 @@ def print_gpo_abuse(G, domain_filter=None):
     console.rule("[bold magenta]GPO Abuse Risks[/bold magenta]")
     found = False
     high_value_keywords = ['domain controllers', 'domain admins', 'enterprise admins', 'administrators', 'dc']
-    
     for n, d in G.nodes(data=True):
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
@@ -591,7 +567,6 @@ def print_gpo_abuse(G, domain_filter=None):
         rights = {edge_data['label'].lower() for _, _, edge_data in incoming}  # Case-insensitive rights
         dangerous = {'genericall', 'writedacl', 'writeowner', 'genericwrite'}
         dangerous_found = dangerous & rights
-        
         if dangerous_found:
             # Check for high-risk scope: Look for GPO links to high-value OUs
             is_high_risk = False
@@ -603,7 +578,6 @@ def print_gpo_abuse(G, domain_filter=None):
                     linked_ous.append(ou_name)
                     if any(kw in ou_name for kw in high_value_keywords):
                         is_high_risk = True
-            
             found = True
             risk_color = "[red]" if is_high_risk else "[yellow]"
             scope_note = f" (High-risk: Linked to {', '.join(linked_ous)})" if linked_ous else " (No links detected - low risk)"
@@ -614,12 +588,10 @@ def print_gpo_abuse(G, domain_filter=None):
                     principal_name = G.nodes[u]['name']
                     console.print(f"  → [green]{principal_name}[/green] --[{edge['label']}]-->")
             add_finding("GPO Abuse", f"Weak GPO: {name}{scope_note}")
-    
     if found:
         print_abuse_panel("GPO Abuse")
     else:
         console.print("[green]No dangerous GPO rights found[/green]")
-
 # ────────────────────────────────────────────────
 # DCSync / Replication Rights
 # ────────────────────────────────────────────────
@@ -631,7 +603,6 @@ def print_dcsync_rights(G, domain_filter=None):
         console.print("[yellow]No domain objects found[/yellow]")
         return
     dangerous_rights = {'getchangesall', 'replicating directory changes all', 'replicating directory changes in filtered set'}  # Case-insensitive
-    
     for domain_oid in domain_oids:
         domain_name = G.nodes[domain_oid]['name']
         incoming = G.in_edges(domain_oid, data=True)
@@ -642,19 +613,16 @@ def print_dcsync_rights(G, domain_filter=None):
                 principal_name = G.nodes[u]['name']
                 console.print(f"[red]DCSync possible[/red]: [green]{principal_name}[/green] --[{d['label']}]--> [cyan]{domain_name}[/cyan] (Domain)")
                 add_finding("DCSync", f"{principal_name} can DCSync on {domain_name}")
-    
     if found:
         print_abuse_panel("DCSync")
     else:
         console.print("[green]No DCSync rights detected[/green]")
-
 # ────────────────────────────────────────────────
 # RBCD
 # ────────────────────────────────────────────────
 def print_rbcd(G, domain_filter=None):
     console.rule("[bold magenta]Resource-Based Constrained Delegation (RBCD)[/bold magenta]")
     found = False
-    
     for n, d in G.nodes(data=True):
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
@@ -664,19 +632,16 @@ def print_rbcd(G, domain_filter=None):
         allowed_to_delegate = props.get('msds-allowedtodelegateto', [])
         if not isinstance(allowed_to_delegate, list):
             allowed_to_delegate = [allowed_to_delegate] if allowed_to_delegate else []
-        
         if allowed_to_delegate:
             found = True
             console.print(f"[yellow]RBCD configured[/yellow]: [bold cyan]{d['name']}[/bold cyan] allows delegation from:")
             for tgt in allowed_to_delegate:
                 console.print(f"  → [green]{tgt}[/green]")
             add_finding("RBCD", f"RBCD on {d['name']}")
-    
     if found:
         print_abuse_panel("RBCD")
     else:
         console.print("[green]No RBCD configured computers found[/green]")
-
 # ────────────────────────────────────────────────
 # Shortest Paths
 # ────────────────────────────────────────────────
@@ -692,11 +657,9 @@ def print_shortest_paths(G, fast=False, max_paths=10, target_filter=None, domain
     if not users:
         console.print("[yellow]No user objects found for path calculation[/yellow]")
         return
-    
     if fast:
         console.print("[yellow]Fast mode enabled: Skipping shortest path computation[/yellow]")
         return
-    
     for tid, tname, ttype in targets[:5]:  # Limit targets to 5 for brevity
         console.print(f"\n[bold]Target:[/bold] [bold cyan]{tname}[/bold cyan] ({ttype})")
         count = 0
@@ -735,7 +698,6 @@ def print_shortest_paths(G, fast=False, max_paths=10, target_filter=None, domain
             else:
                 console.print("    [dim]No paths found within limit[/dim]")
         add_finding("Shortest Paths", f"Paths to {tname}", score=6 if count > 0 else 0)
-
 # ────────────────────────────────────────────────
 # Dangerous Permissions
 # ────────────────────────────────────────────────
@@ -751,7 +713,6 @@ def print_dangerous_permissions(G, domain_filter=None, indirect=False):
     if not targets:
         console.print("[yellow]No high-value targets found[/yellow]")
         return
-    
     for tid, tname, ttype in targets:
         incoming = G.in_edges(tid, data=True)
         dangerous_edges = [
@@ -765,7 +726,6 @@ def print_dangerous_permissions(G, domain_filter=None, indirect=False):
             rights_by_type = defaultdict(list)
             for principal_oid, right in dangerous_edges:
                 rights_by_type[right].append(principal_oid)
-            
             for right, principals in rights_by_type.items():
                 principal_names = [G.nodes[p]['name'] for p in principals[:5]]  # Limit to top 5
                 count = len(principals)
@@ -773,7 +733,6 @@ def print_dangerous_permissions(G, domain_filter=None, indirect=False):
                 console.print(f"  • [yellow]{right}[/yellow]: [green]{', '.join(principal_names)}{extra}[/green]")
             console.print(f"    [dim](Note: Only direct rights shown; indirect via groups not included)[/dim]")
             add_finding("Dangerous Permissions", f"Dangerous rights on {tname}")
-    
     # Indirect via groups if requested
     if indirect:
         console.print(f"\n[dim]Checking indirect dangerous permissions via groups...[/dim]")
@@ -787,12 +746,10 @@ def print_dangerous_permissions(G, domain_filter=None, indirect=False):
                         members = [m for m in G.predecessors(u) if any(edge_data.get('label') == 'MemberOf' for edge_data in (G.get_edge_data(m, u) or {}).values())]
                         if members:
                             console.print(f"  [yellow]Indirect via group {group_name}[/yellow]: {', '.join([G.nodes[m]['name'] for m in members[:3]])}")
-    
     if found:
         print_abuse_panel("Dangerous Permissions")
     else:
         console.print("[green]No dangerous ACLs found on high-value objects[/green]")
-
 # ────────────────────────────────────────────────
 # Kerberoastable & AS-REP Roastable
 # ────────────────────────────────────────────────
@@ -808,7 +765,7 @@ def print_kerberoastable(G, domain_filter=None):
             continue
         props = d.get('props', {})
         # Case-insensitive property checks with variants
-        hasspn = props.get('hasspn', props.get('hasSPN', props.get('has_spn', False)))
+        hasspn = get_bool_prop_ci(props, ['hasspn', 'hasSPN', 'has_spn'])
         sensitive = props.get('sensitive', props.get('Sensitive', False))
         enabled = props.get('enabled', props.get('Enabled', True))
         if hasspn and not sensitive and enabled:
@@ -816,10 +773,10 @@ def print_kerberoastable(G, domain_filter=None):
             console.print(f"  • [cyan]{d['name']}[/cyan]")
             count += 1
             if count >= max_display:
-                remaining = sum(1 for _ in G.nodes(data=True) if _.get('type', '').lower() == 'user' and 
-                                _.get('props', {}).get('hasspn', _.get('props', {}).get('hasSPN', False)) and 
-                                not _.get('props', {}).get('sensitive', False) and 
-                                _.get('props', {}).get('enabled', True)) - max_display
+                remaining = sum(1 for _ in G.nodes(data=True) if _.get('type', '').lower() == 'user' and
+                                get_bool_prop_ci(_.get('props', {}), ['hasspn', 'hasSPN', 'has_spn']) and
+                                not _.get('props', {}).get('sensitive', _.get('props', {}).get('Sensitive', False)) and
+                                _.get('props', {}).get('enabled', _.get('props', {}).get('Enabled', True))) - max_display
                 if remaining > 0:
                     console.print(f"  [dim]... and {remaining} more[/dim]")
                 break
@@ -841,7 +798,7 @@ def print_as_rep_roastable(G, domain_filter=None):
             continue
         props = d.get('props', {})
         # Case-insensitive property checks with variants
-        dontreqpreauth = props.get('dontreqpreauth', props.get('dontReqPreauth', props.get('dont_req_preauth', False)))
+        dontreqpreauth = get_bool_prop_ci(props, ['dontreqpreauth', 'dontReqPreauth', 'dont_req_preauth'])
         sensitive = props.get('sensitive', props.get('Sensitive', False))
         enabled = props.get('enabled', props.get('Enabled', True))
         if dontreqpreauth and not sensitive and enabled:
@@ -849,10 +806,10 @@ def print_as_rep_roastable(G, domain_filter=None):
             console.print(f"  • [cyan]{d['name']}[/cyan]")
             count += 1
             if count >= max_display:
-                remaining = sum(1 for _ in G.nodes(data=True) if _.get('type', '').lower() == 'user' and 
-                                _.get('props', {}).get('dontreqpreauth', _.get('props', {}).get('dontReqPreauth', False)) and 
-                                not _.get('props', {}).get('sensitive', False) and 
-                                _.get('props', {}).get('enabled', True)) - max_display
+                remaining = sum(1 for _ in G.nodes(data=True) if _.get('type', '').lower() == 'user' and
+                                get_bool_prop_ci(_.get('props', {}), ['dontreqpreauth', 'dontReqPreauth', 'dont_req_preauth']) and
+                                not _.get('props', {}).get('sensitive', _.get('props', {}).get('Sensitive', False)) and
+                                _.get('props', {}).get('enabled', _.get('props', {}).get('Enabled', True))) - max_display
                 if remaining > 0:
                     console.print(f"  [dim]... and {remaining} more[/dim]")
                 break
@@ -879,18 +836,15 @@ def print_sessions_localadmin(G, domain_filter=None):
     # Filter edges: label == 'LocalAdmin' and target (v) is a Computer
     admin_edges = [(u, v, d) for u, v, d in G.edges(data=True) if d.get('label') == 'LocalAdmin' and v in computers and u in G.nodes and v in G.nodes]
     counts = Counter(u for u, _, _ in admin_edges)
-    
     if not counts:
         console.print("[green]No LocalAdmin rights found[/green]")
         return
-    
     for principal, count in counts.most_common(10):
         examples = [G.nodes[v]['name'] for pu, v, _ in admin_edges if pu == principal][:3]
         table.add_row(G.nodes[principal]['name'], str(count), ", ".join(examples))
     console.print(table)
     total_admins = sum(counts.values())
     console.print(f"[dim]Total LocalAdmin instances: {total_admins} on {len(computers)} computers[/dim]")
-
 # ────────────────────────────────────────────────
 # Export
 # ────────────────────────────────────────────────
@@ -954,7 +908,6 @@ def export_results(G, output_prefix="bashound", format_type="md", domain_filter=
                 examples = [G.nodes[v]['name'] for pu, v, _ in admin_edges if pu == principal][:3]
                 writer.writerow([G.nodes[principal]['name'], count, ", ".join(examples)])
         console.print(f"[green]Exported CSV:[/green] {path}")
-
 # ────────────────────────────────────────────────
 # Main
 # ────────────────────────────────────────────────
@@ -1028,6 +981,5 @@ def main():
     print_prioritized_findings()
     elapsed = time.time() - start_time
     console.print(f"\n[italic green]Completed in {elapsed:.2f} seconds[/italic green]")
-
 if __name__ == '__main__':
     main()
