@@ -290,7 +290,7 @@ class TestBloodBash(unittest.TestCase):
         with open(html_file, 'r') as f:
             content = f.read()
             self.assertIn("<html>", content)
-            self.assertIn("BashHound Report", content)
+            self.assertIn("BloodBash Report", content)
             self.assertIn("Prioritized Findings", content)
     
     def test_export_csv(self):
