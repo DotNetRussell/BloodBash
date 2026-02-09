@@ -87,7 +87,7 @@ python3 BloodBash.py sharpout --all --fast
 | `--as-rep-roastable`        | AS-REP roastable accounts                            |
 | `--verbose`                 | Show detailed object type & user summary             |
 | `--all`                     | Run all analyses                                     |
-| `--export [md|json]``        | Export results to file (default: md)                 |
+| `--export [md\|json]`        | Export results to file (default: md)                 |
 | `--fast`                    | Skip heavy pathfinding for speed                     |
 If no flags are specified, the script runs in a minimal mode. Use `--all` for full analysis.
 
