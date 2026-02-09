@@ -15,6 +15,7 @@ import time
 import csv  # For CSV export
 import sqlite3  # For database persistence
 from html import escape  # For HTML export
+import yaml  # For YAML export
 __version__ = "1.1.0"  # Updated version for enhancements
 console = Console()
 # ────────────────────────────────────────────────
@@ -30,6 +31,8 @@ SEVERITY_SCORES = {
     "Kerberoastable": 5,
     "AS-REP Roastable": 5,
     "Shortest Paths": 6,  # Depends on length
+    "Password Never Expires": 4,  # Moderate risk: Old passwords may persist
+    "Password Not Required": 8,   # High risk: No auth barrier
 }
 global_findings = []  # List of (score, category, details) for prioritization
 def add_finding(category, details, score=None):
@@ -379,11 +382,11 @@ def print_verbose_summary(G, domain_filter=None):
         types_count[d['type']] += 1
     table = Table(title="Object Types", show_header=True, header_style="bold cyan")
     table.add_column("Type", style="green")
-    table.add_column("Count", justify="right", style="yellow")
+    table.add_column("Count", justify="right")
     for t, cnt in sorted(types_count.items(), key=lambda x: x[1], reverse=True):
         table.add_row(t, str(cnt))
     console.print(table)
-    users = [d['name'] for _, d in G.nodes(data=True) if d['type'] == 'User' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]
+    users = [d['name'] for _, d in G.nodes(data=True) if d['type'].lower() == 'user' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]
     if users:
         console.print(f"\n[bold cyan]Users ({len(users)}):[/bold cyan]")
         for name in sorted(users)[:len(users)]:
@@ -468,6 +471,55 @@ def print_password_in_descriptions(G, domain_filter=None):
         print_abuse_panel("Password in Description")  # Reuse or add panel
     else:
         console.print("[green]No passwords detected in user descriptions[/green]")
+
+def print_password_never_expires(G, domain_filter=None):
+    console.rule("[bold magenta]Users with 'Password Never Expires' Set[/bold magenta]")
+    found = False
+    for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
+        if d['type'].lower() == 'user':
+            props = d.get('props') or {}
+            password_never_expires = get_bool_prop_ci(props, ['passwordneverexpires', 'PasswordNeverExpires'])
+            if password_never_expires:
+                found = True
+                console.print(f"[yellow]Password Never Expires enabled[/yellow]: [green]{d['name']}[/green]")
+                add_finding("Password Never Expires", f"User {d['name']} has 'Password Never Expires' set")
+    if found:
+        console.print(Panel(
+            "[bold yellow]Impact:[/bold yellow] Passwords may never expire, leading to old/weak passwords persisting indefinitely.\n"
+            "[bold]Mitigation:[/bold] Review and enforce password policies; consider resetting passwords for affected accounts.\n"
+            "[bold]Tools:[/bold] Use PowerShell (Get-ADUser) or AD tools to audit.",
+            title="Abuse Suggestions: Password Never Expires",
+            border_style="yellow"
+        ))
+    else:
+        console.print("[green]No users with 'Password Never Expires' found[/green]")
+
+def print_password_not_required(G, domain_filter=None):
+    console.rule("[bold magenta]Users with 'Password Not Required' Set[/bold magenta]")
+    found = False
+    for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
+        if d['type'].lower() == 'user':
+            props = d.get('props') or {}
+            password_not_required = get_bool_prop_ci(props, ['passwordnotrequired', 'PasswordNotRequired'])
+            if password_not_required:
+                found = True
+                console.print(f"[red]Password Not Required enabled[/red]: [green]{d['name']}[/green]")
+                add_finding("Password Not Required", f"User {d['name']} has 'Password Not Required' set")
+    if found:
+        console.print(Panel(
+            "[bold red]Impact:[/bold red] No password required for login, enabling easy account takeover or unauthorized access.\n"
+            "[bold]Abuse:[/bold] Log in without a password; escalate privileges if account has rights.\n"
+            "[bold]Mitigation:[/bold] Enforce passwords; disable or monitor such accounts.\n"
+            "[bold]Tools:[/bold] ADUC, PowerShell, or BloodHound for auditing.",
+            title="Abuse Suggestions: Password Not Required",
+            border_style="red"
+        ))
+    else:
+        console.print("[green]No users with 'Password Not Required' found[/green]")
 
 # ────────────────────────────────────────────────
 # Unconstrained delegation
@@ -915,11 +967,11 @@ def print_sessions_localadmin(G, domain_filter=None):
 # ────────────────────────────────────────────────
 # Export
 # ────────────────────────────────────────────────
-def export_results(G, output_prefix="bashound", format_type="md", domain_filter=None):
+def export_results(G, output_prefix="bloodbash", format_type="md", domain_filter=None):
     if format_type == "md":
         path = f"{output_prefix}.md"
         with open(path, "w", encoding="utf-8") as f:
-            f.write("# BashHound Report\n\n")
+            f.write("# BloodBash Report\n\n")
             f.write("## High-Value Targets\n")
             for _, name, typ in get_high_value_targets(G, domain_filter):
                 f.write(f"- {name} ({typ})\n")
@@ -942,7 +994,7 @@ def export_results(G, output_prefix="bashound", format_type="md", domain_filter=
         console.print(f"[green]Exported JSON:[/green] {path}")
     elif format_type == "html":
         path = f"{output_prefix}.html"
-        html = f"""<html><head><title>BashHound Report</title><style>
+        html = f"""<html><head><title>BloodBash Report</title><style>
         body {{ font-family: Arial; }}
         .red {{ color: red; }}
         .yellow {{ color: orange; }}
@@ -950,7 +1002,7 @@ def export_results(G, output_prefix="bashound", format_type="md", domain_filter=
         table {{ border-collapse: collapse; }}
         th, td {{ border: 1px solid black; padding: 5px; }}
         </style></head><body>
-        <h1>BashHound Report</h1>
+        <h1>BloodBash Report</h1>
         <h2>High-Value Targets</h2><ul>"""
         for _, name, typ in get_high_value_targets(G, domain_filter):
             html += f"<li>{escape(name)} ({escape(typ)})</li>"
@@ -975,6 +1027,20 @@ def export_results(G, output_prefix="bashound", format_type="md", domain_filter=
                 examples = [G.nodes[v]['name'] for pu, v, _ in admin_edges if pu == principal][:3]
                 writer.writerow([G.nodes[principal]['name'], count, ", ".join(examples)])
         console.print(f"[green]Exported CSV:[/green] {path}")
+    elif format_type == "yaml":
+        path = f"{output_prefix}.yaml"
+        summary = {
+            "nodes": G.number_of_nodes(),
+            "edges": G.number_of_edges(),
+            "high_value": [
+                {"name": d['name'], "type": d['type']} for _, d in G.nodes(data=True)
+                if any(k in d['name'].lower() for k in ['admin', 'krbtgt', 'ca', 'template']) and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)
+            ],
+            "findings": [{"score": s, "category": c, "details": d} for s, c, d in global_findings]
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.dump(summary, f, default_flow_style=False)
+        console.print(f"[green]Exported YAML:[/green] {path}")
 # ────────────────────────────────────────────────
 # Main
 # ────────────────────────────────────────────────
@@ -992,10 +1058,12 @@ def main():
     parser.add_argument('--as-rep-roastable', action='store_true')
     parser.add_argument('--sid-history', action='store_true')
     parser.add_argument('--unconstrained-delegation', action='store_true')
-    parser.add_argument('--password-descriptions', action='store_true')  # New argument
+    parser.add_argument('--password-descriptions', action='store_true')
+    parser.add_argument('--password-never-expires', action='store_true')
+    parser.add_argument('--password-not-required', action='store_true')
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--all', action='store_true')
-    parser.add_argument('--export', nargs='?', const='md', choices=['md', 'json', 'html', 'csv'], help='Export results')
+    parser.add_argument('--export', nargs='?', const='md', choices=['md', 'json', 'html', 'csv', 'yaml'], help='Export results')
     parser.add_argument('--fast', action='store_true', help='Fast mode (skip heavy pathfinding)')
     parser.add_argument('--domain', help='Filter by domain')
     parser.add_argument('--indirect', action='store_true', help='Include indirect paths/permissions')
@@ -1014,14 +1082,14 @@ def main():
     if args.all:
         mode_str = "Full analysis (--all)"
     elif any([args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse,
-              args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions]):  # Updated
+              args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions, args.password_never_expires, args.password_not_required]):
         mode_str = "Selected checks"
     else:
         mode_str = "Default (verbose summary + common checks)"
     print_intro_banner(mode_str)
     run_all = args.all or not any([
         args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse,
-        args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions  # Updated
+        args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions, args.password_never_expires, args.password_not_required
     ])
     if args.verbose or run_all:
         print_verbose_summary(G, args.domain)
@@ -1047,8 +1115,12 @@ def main():
         print_sid_history_abuse(G, args.domain)
     if args.unconstrained_delegation or run_all:
         print_unconstrained_delegation(G, args.domain)
-    if args.password_descriptions or run_all:  # New call
+    if args.password_descriptions or run_all:
         print_password_in_descriptions(G, args.domain)
+    if args.password_never_expires or run_all:
+        print_password_never_expires(G, args.domain)
+    if args.password_not_required or run_all:
+        print_password_not_required(G, args.domain)
     if args.export:
         export_results(G, format_type=args.export, domain_filter=args.domain)
     print_prioritized_findings()
