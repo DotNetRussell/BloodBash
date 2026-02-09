@@ -10,10 +10,9 @@ It parses SharpHound (v6+) JSON files offline — no Neo4j or BloodHound GUI nee
 It builds a directed graph using `networkx`, correctly identifies object types, finds attack paths, detects vulnerabilities (especially ADCS ESC1–ESC8), and provides BloodHound-style queries with rich, colored output.
 Perfect for red teamers, OSCP/CRTP prep, and fast AD reconnaissance when you only have raw SharpHound data.
 
-![BloodBash verbose output example](https://i.imgur.com/8PqzYAU.png)
-![BloodBash verbose output example](https://i.imgur.com/Dx949oF.png)
-![BloodBash verbose output example](https://i.imgur.com/zVbyFZz.png)
-![BloodBash verbose output example](https://i.imgur.com/vGSOFc0.png)
+![BloodBash verbose output example](https://i.imgur.com/zqsjVgC.png)
+![BloodBash verbose output example](https://i.imgur.com/GtGvchM.png)
+![BloodBash verbose output example](https://i.imgur.com/tTHVUuy.png)
 
 ## Features
 - Full **SharpHound v6+** support (users, computers, groups, GPOs, OUs, domains, cert templates, Enterprise CAs, Root CAs, NTAuth stores, etc.)
@@ -34,6 +33,12 @@ Perfect for red teamers, OSCP/CRTP prep, and fast AD reconnaissance when you onl
 - **Export** results to Markdown or JSON
 - **Fast mode** (`--fast`) — skips heavy pathfinding on large datasets
 - Simple custom query support (`--query`)
+
+![BloodBash verbose output example](https://i.imgur.com/4rbBgDW.png) 
+![BloodBash verbose output example](https://i.imgur.com/ODvkG6a.png)
+
+Now includes a metasploit module! 
+![BloodBash verbose output example](https://i.imgur.com/EmtEErd.png)
 
 ## Installation
 ```bash
