@@ -1,0 +1,42 @@
+{
+  "meta": {
+    "type": "users"
+  },
+  "data": [
+    {
+      "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-2001",
+      "Properties": {
+        "name": "User1",
+        "passwordnotrequired": true,
+        "domain": "test.local"
+      },
+      "ObjectType": "User"
+    },
+    {
+      "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-2002",
+      "Properties": {
+        "name": "User2",
+        "passwordnotrequired": false,
+        "domain": "test.local"
+      },
+      "ObjectType": "User"
+    },
+    {
+      "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-2003",
+      "Properties": {
+        "name": "User3",
+        "PasswordNotRequired": true,
+        "domain": "test.local"
+      },
+      "ObjectType": "User"
+    },
+    {
+      "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-2004",
+      "Properties": {
+        "name": "User4",
+        "domain": "test.local"
+      },
+      "ObjectType": "User"
+    }
+  ]
+}

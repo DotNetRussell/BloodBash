@@ -47,6 +47,69 @@ class TestBloodBash(unittest.TestCase):
         output = string_io.getvalue()
         return output
     
+
+    def test_new_features_password_never_expires(self):
+        """Test detection of users with 'Password Never Expires' set."""
+        G = nx.MultiDiGraph()
+        G.add_node("U1", name="User1", type="User", props={"passwordneverexpires": True})  # Should detect
+        G.add_node("U2", name="User2", type="User", props={"passwordneverexpires": False})  # Should not detect
+        G.add_node("U3", name="User3", type="User", props={"PasswordNeverExpires": True})  # Case-insensitive
+        G.add_node("U4", name="User4", type="User", props={})  # Missing prop, should not detect
+        output = self._capture_output(bloodbash_globals['print_password_never_expires'], G)
+        self.assertIn("Password Never Expires", output)
+        self.assertIn("User1", output)
+        self.assertIn("User3", output)
+        self.assertNotIn("User2", output)
+        self.assertNotIn("User4", output)
+        # Check findings were added
+        self.assertTrue(any("Password Never Expires" in f[2] for f in bloodbash_globals['global_findings']))
+
+    def test_new_features_password_not_required(self):
+        """Test detection of users with 'Password Not Required' set."""
+        G = nx.MultiDiGraph()
+        G.add_node("U1", name="User1", type="User", props={"passwordnotrequired": True})  # Should detect
+        G.add_node("U2", name="User2", type="User", props={"passwordnotrequired": False})  # Should not detect
+        G.add_node("U3", name="User3", type="User", props={"PasswordNotRequired": True})  # Case-insensitive
+        G.add_node("U4", name="User4", type="User", props={})  # Missing prop, should not detect
+        output = self._capture_output(bloodbash_globals['print_password_not_required'], G)
+        self.assertIn("Password Not Required", output)
+        self.assertIn("User1", output)
+        self.assertIn("User3", output)
+        self.assertNotIn("User2", output)
+        self.assertNotIn("User4", output)
+        # Check findings were added
+        self.assertTrue(any("Password Not Required" in f[2] for f in bloodbash_globals['global_findings']))
+
+    def test_export_yaml(self):
+        """Test YAML export functionality."""
+        G = nx.MultiDiGraph()
+        G.add_node("T", name="Target", type="User")
+        bloodbash_globals['add_finding']("Test", "Sample finding")
+        export_path = os.path.join(self.temp_dir, "test")
+        bloodbash_globals['export_results'](G, output_prefix=export_path, format_type="yaml")
+        yaml_file = f"{export_path}.yaml"
+        self.assertTrue(os.path.exists(yaml_file))
+        with open(yaml_file, 'r') as f:
+            content = f.read()
+            self.assertIn("nodes:", content)
+            self.assertIn("edges:", content)
+            self.assertIn("high_value:", content)
+            self.assertIn("Sample finding", content)  # Findings included
+
+    def test_no_results_password_never_expires(self):
+        """Test that print_password_never_expires handles no matches gracefully."""
+        G = nx.MultiDiGraph()
+        G.add_node("U", name="User", type="User", props={"passwordneverexpires": False})
+        output = self._capture_output(bloodbash_globals['print_password_never_expires'], G)
+        self.assertIn("No users with 'Password Never Expires' found", output)
+
+    def test_no_results_password_not_required(self):
+        """Test that print_password_not_required handles no matches gracefully."""
+        G = nx.MultiDiGraph()
+        G.add_node("U", name="User", type="User", props={"passwordnotrequired": False})
+        output = self._capture_output(bloodbash_globals['print_password_not_required'], G)
+        self.assertIn("No users with 'Password Not Required' found", output)
+
     def test_adcs_vulnerabilities(self):
         try:
             G = self._load_and_build_graph("adcs-tests")
@@ -227,7 +290,7 @@ class TestBloodBash(unittest.TestCase):
         with open(html_file, 'r') as f:
             content = f.read()
             self.assertIn("<html>", content)
-            self.assertIn("BashHound Report", content)
+            self.assertIn("BloodBash Report", content)
             self.assertIn("Prioritized Findings", content)
     
     def test_export_csv(self):

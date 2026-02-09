@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "type": "computers"
+  },
+  "data": [
+    {
+      "ObjectIdentifier": "S-1-5-21-123456789-123456789-123456789-3002",
+      "Properties": {
+        "name": "DC1$",
+        "domain": "test.local"
+      },
+      "ObjectType": "Computer"
+    }
+  ]
+}
