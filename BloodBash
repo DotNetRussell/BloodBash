@@ -33,6 +33,10 @@ SEVERITY_SCORES = {
     "Shortest Paths": 6,  # Depends on length
     "Password Never Expires": 4,  # Moderate risk: Old passwords may persist
     "Password Not Required": 8,   # High risk: No auth barrier
+    "Shadow Credentials": 8,      # High risk: Key addition without password change
+    "GPO Content": 7,             # Medium risk: Exploitable GPO settings
+    "Constrained Delegation": 7,  # Medium risk: Service impersonation
+    "LAPS": 6,                    # Moderate risk: Password management
 }
 global_findings = []  # List of (score, category, details) for prioritization
 def add_finding(category, details, score=None):
@@ -207,7 +211,6 @@ Mitigation: Audit and remove sensitive info from descriptions; enforce policies.
         console.print(Panel(content, title=title, border_style=border))
     else:
         console.print(f"[dim]No abuse example defined for {vuln_type}[/dim]")
-
 
 # ────────────────────────────────────────────────
 # Loading & Graph Building
@@ -520,6 +523,123 @@ def print_password_not_required(G, domain_filter=None):
         ))
     else:
         console.print("[green]No users with 'Password Not Required' found[/green]")
+
+def print_shadow_credentials(G, domain_filter=None):
+    console.rule("[bold magenta]Shadow Credentials Detection[/bold magenta]")
+    found = False
+    for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
+        if d['type'].lower() == 'user':
+            props = d.get('props') or {}
+            key_credential_link = get_bool_prop_ci(props, ['keycredentiallink', 'msds-keycredentiallink', 'KeyCredentialLink'])
+            if key_credential_link:
+                found = True
+                console.print(f"[red]Shadow Credentials detected[/red]: [green]{d['name']}[/green]")
+                add_finding("Shadow Credentials", f"User {d['name']} has Shadow Credentials configured")
+    if found:
+        console.print(Panel(
+            "[bold red]Impact:[/bold red] Allows adding keys for authentication without changing password → persistent access.\n"
+            "[bold]Abuse:[/bold] Use tools like Whisker or DSInternals to add keys and impersonate.\n"
+            "[bold]Mitigation:[/bold] Disable KeyCredentialLink or monitor for changes.\n"
+            "[bold]Tools:[/bold] Whisker (https://github.com/eladshamir/Whisker), DSInternals.",
+            title="Abuse Suggestions: Shadow Credentials",
+            border_style="red"
+        ))
+    else:
+        console.print("[green]No accounts with Shadow Credentials found[/green]")
+
+def print_gpo_content_parsing(G, domain_filter=None):
+    console.rule("[bold magenta]GPO Content Parsing for Exploitable Settings[/bold magenta]")
+    found = False
+    exploitable_keys = ['taskname', 'scriptpath', 'scheduledtask', 'TaskName', 'ScriptPath', 'ScheduledTask']
+    for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
+        if d['type'].lower() == 'gpo':
+            props = d.get('props') or {}
+            exploitable_content = any(props.get(key) for key in exploitable_keys)
+            if exploitable_content:
+                found = True
+                console.print(f"[yellow]Exploitable GPO content[/yellow]: [bold cyan]{d['name']}[/bold cyan]")
+                for key in exploitable_keys:
+                    if props.get(key):
+                        console.print(f"  → [cyan]{key}[/cyan]: {props[key]}")
+                add_finding("GPO Content", f"GPO {d['name']} has exploitable content")
+    if found:
+        console.print(Panel(
+            "[bold yellow]Impact:[/bold yellow] GPOs with scheduled tasks or scripts can execute code on affected machines.\n"
+            "[bold]Abuse:[/bold] Modify GPO to deploy malware or backdoors.\n"
+            "[bold]Mitigation:[/bold] Audit GPO content; restrict editing rights.\n"
+            "[bold]Tools:[/bold] SharpGPOAbuse, Group Policy Management Console.",
+            title="Abuse Suggestions: GPO Content",
+            border_style="yellow"
+        ))
+    else:
+        console.print("[green]No exploitable GPO content found[/green]")
+
+def print_constrained_delegation(G, domain_filter=None):
+    console.rule("[bold magenta]Constrained Delegation Detection[/bold magenta]")
+    found = False
+    for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
+        if d['type'].lower() == 'computer':
+            props = d.get('props') or {}
+            trusted_to_auth = get_bool_prop_ci(props, ['trustedtoauthfordelegation', 'TrustedToAuthForDelegation'])
+            allowed_to_delegate_to = props.get('msds-allowedtodelegateto', []) or props.get('allowedtodelegateto', [])
+            if trusted_to_auth or allowed_to_delegate_to:
+                found = True
+                console.print(f"[yellow]Constrained Delegation enabled[/yellow]: [bold cyan]{d['name']}[/bold cyan]")
+                if allowed_to_delegate_to:
+                    console.print(f"  → Allowed to delegate to: {', '.join(allowed_to_delegate_to)}")
+                add_finding("Constrained Delegation", f"Computer {d['name']} has Constrained Delegation")
+    if found:
+        console.print(Panel(
+            "[bold yellow]Impact:[/bold yellow] Allows impersonation of users to specific services.\n"
+            "[bold]Abuse:[/bold] Use S4U2Self/S4U2Proxy to relay authentication.\n"
+            "[bold]Mitigation:[/bold] Limit delegation targets; use resource-based constraints.\n"
+            "[bold]Tools:[/bold] Rubeus, Impacket.",
+            title="Abuse Suggestions: Constrained Delegation",
+            border_style="yellow"
+        ))
+    else:
+        console.print("[green]No Constrained Delegation found[/green]")
+
+def print_laps_status(G, domain_filter=None):
+    console.rule("[bold magenta]LAPS (Local Administrator Password Solution) Status[/bold magenta]")
+    computers = [d for _, d in G.nodes(data=True) if d['type'].lower() == 'computer' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]
+    if not computers:
+        console.print("[green]No computers found[/green]")
+        return
+    found_enabled = False
+    found_disabled = False
+    for d in computers:
+        props = d.get('props') or {}
+        laps_password = props.get('ms-mcs-admpwd') or props.get('msMcsAdmPwd')
+        if laps_password:
+            found_enabled = True
+            console.print(f"[green]LAPS enabled[/green]: [bold cyan]{d['name']}[/bold cyan]")
+        else:
+            found_disabled = True
+            console.print(f"[yellow]LAPS not enabled[/yellow]: [bold cyan]{d['name']}[/bold cyan]")
+            add_finding("LAPS", f"Computer {d['name']} does not have LAPS enabled")
+    if found_enabled:
+        console.print(Panel(
+            "[bold green]Impact:[/bold green] LAPS secures local admin passwords.\n"
+            "[bold]Mitigation:[/bold] Ensure LAPS is enabled on all computers.\n"
+            "[bold]Tools:[/bold] LAPS management tools, AD queries.",
+            title="LAPS Enabled",
+            border_style="green"
+        ))
+    if found_disabled:
+        console.print(Panel(
+            "[bold yellow]Impact:[/bold yellow] Local admin passwords may be weak or shared → easy compromise.\n"
+            "[bold]Mitigation:[/bold] Enable LAPS to randomize and secure passwords.\n"
+            "[bold]Tools:[/bold] LAPS deployment scripts.",
+            title="LAPS Not Enabled",
+            border_style="yellow"
+        ))
 
 # ────────────────────────────────────────────────
 # Unconstrained delegation
@@ -904,7 +1024,6 @@ def print_kerberoastable(G, domain_filter=None):
         add_finding("Kerberoastable", f"{count} accounts")
     else:
         console.print("[green]None found[/green]")
-
 def print_as_rep_roastable(G, domain_filter=None):
     console.rule("[bold magenta]AS-REP Roastable Accounts (DONT_REQ_PREAUTH)[/bold magenta]")
     found = False
@@ -1061,6 +1180,10 @@ def main():
     parser.add_argument('--password-descriptions', action='store_true')
     parser.add_argument('--password-never-expires', action='store_true')
     parser.add_argument('--password-not-required', action='store_true')
+    parser.add_argument('--shadow-credentials', action='store_true')
+    parser.add_argument('--gpo-parsing', action='store_true')
+    parser.add_argument('--constrained-delegation', action='store_true')
+    parser.add_argument('--laps', action='store_true')
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--all', action='store_true')
     parser.add_argument('--export', nargs='?', const='md', choices=['md', 'json', 'html', 'csv', 'yaml'], help='Export results')
@@ -1082,14 +1205,14 @@ def main():
     if args.all:
         mode_str = "Full analysis (--all)"
     elif any([args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse,
-              args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions, args.password_never_expires, args.password_not_required]):
+              args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions, args.password_never_expires, args.password_not_required, args.shadow_credentials, args.gpo_parsing, args.constrained_delegation, args.laps]):
         mode_str = "Selected checks"
     else:
         mode_str = "Default (verbose summary + common checks)"
     print_intro_banner(mode_str)
     run_all = args.all or not any([
         args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse,
-        args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions, args.password_never_expires, args.password_not_required
+        args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions, args.password_never_expires, args.password_not_required, args.shadow_credentials, args.gpo_parsing, args.constrained_delegation, args.laps
     ])
     if args.verbose or run_all:
         print_verbose_summary(G, args.domain)
@@ -1121,6 +1244,14 @@ def main():
         print_password_never_expires(G, args.domain)
     if args.password_not_required or run_all:
         print_password_not_required(G, args.domain)
+    if args.shadow_credentials or run_all:
+        print_shadow_credentials(G, args.domain)
+    if args.gpo_parsing or run_all:
+        print_gpo_content_parsing(G, args.domain)
+    if args.constrained_delegation or run_all:
+        print_constrained_delegation(G, args.domain)
+    if args.laps or run_all:
+        print_laps_status(G, args.domain)
     if args.export:
         export_results(G, format_type=args.export, domain_filter=args.domain)
     print_prioritized_findings()

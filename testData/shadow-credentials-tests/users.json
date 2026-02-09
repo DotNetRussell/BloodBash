@@ -1,0 +1,9 @@
+{
+  "meta": { "type": "users" },
+  "data": [
+    { "ObjectIdentifier": "S-1-5-21-1000-1000-1000-1001", "Properties": { "name": "User1", "keycredentiallink": true, "domain": "test.local" }, "ObjectType": "User" },
+    { "ObjectIdentifier": "S-1-5-21-1000-1000-1000-1002", "Properties": { "name": "User2", "domain": "test.local" }, "ObjectType": "User" },
+    { "ObjectIdentifier": "S-1-5-21-1000-1000-1000-1003", "Properties": { "name": "User3", "KeyCredentialLink": true, "domain": "test.local" }, "ObjectType": "User" },
+    { "ObjectIdentifier": "S-1-5-21-1000-1000-1000-1004", "Properties": { "name": "User4", "domain": "test.local" }, "ObjectType": "User" }
+  ]
+}
