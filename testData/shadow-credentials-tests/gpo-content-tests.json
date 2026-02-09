@@ -1,0 +1,7 @@
+{
+  "meta": { "type": "gpos" },
+  "data": [
+    { "ObjectIdentifier": "GPO-1", "Properties": { "name": "VulnerableGPO", "taskname": "EvilTask", "domain": "test.local" }, "ObjectType": "GPO" },
+    { "ObjectIdentifier": "GPO-2", "Properties": { "name": "SafeGPO", "domain": "test.local" }, "ObjectType": "GPO" }
+  ]
+}

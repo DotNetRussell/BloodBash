@@ -1,0 +1,9 @@
+{
+  "meta": { "type": "computers" },
+  "data": [
+    { "ObjectIdentifier": "S-1-5-21-1000-1000-1000-2001", "Properties": { "name": "Comp1", "trustedtoauthfordelegation": true, "domain": "test.local" }, "ObjectType": "Computer" },
+    { "ObjectIdentifier": "S-1-5-21-1000-1000-1000-2002", "Properties": { "name": "Comp2", "domain": "test.local" }, "ObjectType": "Computer" },
+    { "ObjectIdentifier": "S-1-5-21-1000-1000-1000-2003", "Properties": { "name": "Comp3", "TrustedToAuthForDelegation": true, "domain": "test.local" }, "ObjectType": "Computer" },
+    { "ObjectIdentifier": "S-1-5-21-1000-1000-1000-2004", "Properties": { "name": "Comp4", "domain": "test.local" }, "ObjectType": "Computer" }
+  ]
+}
