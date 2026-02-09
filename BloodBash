@@ -187,10 +187,25 @@ Then use getST.py or Rubeus s4u.
 Tool: Check with PowerView or manually verify.
 Abuse: Use Mimikatz to extract SID history and impersonate.
 """
+    elif vuln_type == "Unconstrained Delegation":
+        content = """
+[yellow]Impact:[/yellow] Computers with unconstrained delegation can impersonate any user who authenticates to them (e.g., via Kerberos tickets).
+Abuse: Relay authentication to the computer, then extract TGTs to impersonate users/domain admins.
+Tools: Rubeus (tgtdeleg), KrbRelay, or Impacket.
+Mitigation: Enable constrained delegation or remove from domain.
+"""
+    elif vuln_type == "Password in Description":
+        content = """
+[yellow]Impact:[/yellow] Users with passwords stored in plain text in their AD description field can be exploited for credential theft.
+Abuse: Extract password from description and use for lateral movement or privilege escalation.
+Mitigation: Audit and remove sensitive info from descriptions; enforce policies.
+"""
     if content:
         console.print(Panel(content, title=title, border_style=border))
     else:
         console.print(f"[dim]No abuse example defined for {vuln_type}[/dim]")
+
+
 # ────────────────────────────────────────────────
 # Loading & Graph Building
 # ────────────────────────────────────────────────
@@ -232,6 +247,7 @@ def load_json_dir(directory):
             progress.advance(task)
     console.print(f"[green]✓ Loaded {len(nodes)} objects from {len(files)} files[/green]")
     return nodes
+
 def build_graph(nodes, db_path=None):
     G = nx.MultiDiGraph()
     name_to_oid = {}
@@ -350,6 +366,7 @@ def load_graph_from_db(db_path):
     conn.close()
     console.print(f"[green]Graph loaded from DB: {db_path}[/green]")
     return G, name_to_oid
+
 # ────────────────────────────────────────────────
 # VERBOSE SUMMARY
 # ────────────────────────────────────────────────
@@ -373,6 +390,7 @@ def print_verbose_summary(G, domain_filter=None):
             console.print(f"  • {name}")
     else:
         console.print("\n[yellow]No User objects found[/yellow]")
+
 # ────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────
@@ -423,6 +441,55 @@ def get_indirect_paths(G, source, target, max_depth=5):
         return paths[:5]  # Limit
     except nx.NetworkXNoPath:
         return []
+
+def print_password_in_descriptions(G, domain_filter=None):
+    console.rule("[bold magenta]Passwords in User Descriptions[/bold magenta]")
+    found = False
+    # Simple regex-like patterns for common password indicators (case-insensitive)
+    password_patterns = [
+        r'password\s*:', r'pwd\s*:', r'pass\s*:', r'credentials\s*:', r'login\s*:',
+        r'account\s*:', r'admin\s*:', r'secret\s*:', r'key\s*:'
+    ]
+    import re  # For regex matching
+    for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
+        if d['type'].lower() == 'user':
+            props = d.get('props', {})
+            description = props.get('description', '').lower()
+            if description:
+                for pattern in password_patterns:
+                    if re.search(pattern, description, re.IGNORECASE):
+                        found = True
+                        console.print(f"[yellow]Potential password in description[/yellow]: [green]{d['name']}[/green] - '{props.get('description')}'")
+                        add_finding("Password in Description", f"User {d['name']} has potential password in description", score=6)
+                        break  # Avoid duplicate alerts per user
+    if found:
+        print_abuse_panel("Password in Description")  # Reuse or add panel
+    else:
+        console.print("[green]No passwords detected in user descriptions[/green]")
+
+# ────────────────────────────────────────────────
+# Unconstrained delegation
+# ────────────────────────────────────────────────
+def print_unconstrained_delegation(G, domain_filter=None):
+    console.rule("[bold magenta]Unconstrained Delegation Detection[/bold magenta]")
+    found = False
+    for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
+        if d['type'].lower() == 'computer':
+            props = d.get('props', {})
+            trusted_for_delegation = props.get('TrustedForDelegation', False)
+            if trusted_for_delegation:
+                found = True
+                console.print(f"[yellow]Unconstrained delegation enabled[/yellow]: [bold cyan]{d['name']}[/bold cyan]")
+                add_finding("Unconstrained Delegation", f"Computer {d['name']} allows unconstrained delegation", score=8)
+    if found:
+        print_abuse_panel("Unconstrained Delegation")  # Add this panel if desired, or reuse existing
+    else:
+        console.print("[green]No unconstrained delegation found[/green]")
+
 # ────────────────────────────────────────────────
 # SID History Abuse
 # ────────────────────────────────────────────────
@@ -924,6 +991,8 @@ def main():
     parser.add_argument('--kerberoastable', action='store_true')
     parser.add_argument('--as-rep-roastable', action='store_true')
     parser.add_argument('--sid-history', action='store_true')
+    parser.add_argument('--unconstrained-delegation', action='store_true')
+    parser.add_argument('--password-descriptions', action='store_true')  # New argument
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--all', action='store_true')
     parser.add_argument('--export', nargs='?', const='md', choices=['md', 'json', 'html', 'csv'], help='Export results')
@@ -945,14 +1014,14 @@ def main():
     if args.all:
         mode_str = "Full analysis (--all)"
     elif any([args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse,
-              args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history]):
+              args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions]):  # Updated
         mode_str = "Selected checks"
     else:
         mode_str = "Default (verbose summary + common checks)"
     print_intro_banner(mode_str)
     run_all = args.all or not any([
         args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse,
-        args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history
+        args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions  # Updated
     ])
     if args.verbose or run_all:
         print_verbose_summary(G, args.domain)
@@ -976,10 +1045,15 @@ def main():
         print_as_rep_roastable(G, args.domain)
     if args.sid_history or run_all:
         print_sid_history_abuse(G, args.domain)
+    if args.unconstrained_delegation or run_all:
+        print_unconstrained_delegation(G, args.domain)
+    if args.password_descriptions or run_all:  # New call
+        print_password_in_descriptions(G, args.domain)
     if args.export:
         export_results(G, format_type=args.export, domain_filter=args.domain)
     print_prioritized_findings()
     elapsed = time.time() - start_time
     console.print(f"\n[italic green]Completed in {elapsed:.2f} seconds[/italic green]")
+
 if __name__ == '__main__':
     main()
