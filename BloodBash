@@ -551,30 +551,54 @@ def print_shadow_credentials(G, domain_filter=None):
 
 def print_gpo_content_parsing(G, domain_filter=None):
     console.rule("[bold magenta]GPO Content Parsing for Exploitable Settings[/bold magenta]")
+    
+    # Debug: confirm we have access to add_finding
+    try:
+        console.print("[bold cyan]DEBUG: add_finding exists →[/bold cyan]", add_finding)
+    except NameError:
+        console.print("[bold red]CRITICAL: add_finding is NOT defined in this scope![/bold red]")
+    
     found = False
     exploitable_keys = ['taskname', 'scriptpath', 'scheduledtask', 'TaskName', 'ScriptPath', 'ScheduledTask']
+
     for n, d in G.nodes(data=True):
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
-        if d['type'].lower() == 'gpo':
-            props = d.get('props') or {}
-            exploitable_content = any(props.get(key) for key in exploitable_keys)
-            if exploitable_content:
-                found = True
-                console.print(f"[yellow]Exploitable GPO content[/yellow]: [bold cyan]{d['name']}[/bold cyan]")
-                for key in exploitable_keys:
-                    if props.get(key):
-                        console.print(f"  → [cyan]{key}[/cyan]: {props[key]}")
-                add_finding("GPO Content", f"GPO {d['name']} has exploitable content")
+
+        if d.get('type', '').lower() != 'gpo':
+            continue
+
+        name = d.get('name') or d.get('ObjectIdentifier', 'Unnamed GPO')
+        props = d.get('props') or {}
+
+        lower_props = {k.lower(): v for k, v in props.items()}
+
+        found_keys = [k for k in exploitable_keys if k.lower() in lower_props and lower_props[k.lower()]]
+
+        console.print(f"[dim]→ GPO {name!r} | found_keys = {found_keys}[/dim]")
+
+        if found_keys:
+            found = True
+            console.print(f"[yellow]Exploitable GPO content detected[/yellow]: [bold cyan]{name}[/bold cyan]")
+
+            for key in exploitable_keys:
+                if key.lower() in lower_props:
+                    value = props.get(key) or lower_props.get(key.lower())
+                    console.print(f"  → [cyan]{key}[/cyan]: {value}")
+
+            # ───────────────────────────────────────────────────────────────
+            console.print("[bold yellow]>>> About to call add_finding <<< [/bold yellow]")
+            try:
+                detail = f"GPO '{name}' has exploitable content: {', '.join(found_keys)}"
+                add_finding("GPO Content", detail)
+                console.print("[bold green]>>> add_finding SUCCESSFULLY CALLED <<< [/bold green]")
+            except Exception as e:
+                console.print("[bold red]>>> ERROR calling add_finding: [/bold red]", str(e))
+            # ───────────────────────────────────────────────────────────────
+
     if found:
-        console.print(Panel(
-            "[bold yellow]Impact:[/bold yellow] GPOs with scheduled tasks or scripts can execute code on affected machines.\n"
-            "[bold]Abuse:[/bold] Modify GPO to deploy malware or backdoors.\n"
-            "[bold]Mitigation:[/bold] Audit GPO content; restrict editing rights.\n"
-            "[bold]Tools:[/bold] SharpGPOAbuse, Group Policy Management Console.",
-            title="Abuse Suggestions: GPO Content",
-            border_style="yellow"
-        ))
+        console.print("[yellow]At least one exploitable GPO found[/yellow]")
+        # print_abuse_panel("GPO Content")  # ← comment out if noisy
     else:
         console.print("[green]No exploitable GPO content found[/green]")
 
@@ -1024,6 +1048,8 @@ def print_kerberoastable(G, domain_filter=None):
         add_finding("Kerberoastable", f"{count} accounts")
     else:
         console.print("[green]None found[/green]")
+
+
 def print_as_rep_roastable(G, domain_filter=None):
     console.rule("[bold magenta]AS-REP Roastable Accounts (DONT_REQ_PREAUTH)[/bold magenta]")
     found = False
@@ -1182,6 +1208,12 @@ def main():
     parser.add_argument('--password-not-required', action='store_true')
     parser.add_argument('--shadow-credentials', action='store_true')
     parser.add_argument('--gpo-parsing', action='store_true')
+    parser.add_argument(
+        "--gpo-content-dir",
+        type=str,
+        default=None,
+        help="Directory containing GPO XML reports (e.g. from Get-GPOReport -ReportType Xml) for content analysis"
+    )
     parser.add_argument('--constrained-delegation', action='store_true')
     parser.add_argument('--laps', action='store_true')
     parser.add_argument('--verbose', action='store_true')
@@ -1252,8 +1284,12 @@ def main():
         print_constrained_delegation(G, args.domain)
     if args.laps or run_all:
         print_laps_status(G, args.domain)
+    if args.all or args.gpo_content_dir:
+        print_gpo_content_analysis(G, args)
     if args.export:
         export_results(G, format_type=args.export, domain_filter=args.domain)
+
+
     print_prioritized_findings()
     elapsed = time.time() - start_time
     console.print(f"\n[italic green]Completed in {elapsed:.2f} seconds[/italic green]")
