@@ -356,14 +356,16 @@ class TestBloodBash(unittest.TestCase):
         self.assertNotIn("Comp2", output)
     
     def test_new_features_password_in_description(self):
-        """Test detection of passwords in user descriptions."""
+        """Test detection of passwords in user descriptions, including None values."""
         G = nx.MultiDiGraph()
         G.add_node("U1", name="User1", type="User", props={"description": "Password: P@ssw0rd123"})
         G.add_node("U2", name="User2", type="User", props={"description": "Normal description"})
+        G.add_node("U3", name="User3", type="User", props={"description": None})  # Test explicit None handling
         output = self._capture_output(bloodbash_globals['print_password_in_descriptions'], G)
         self.assertIn("Potential password in description", output)
-        self.assertIn("User1", output)
-        self.assertNotIn("User2", output)
+        self.assertIn("User1", output)  # Should detect password pattern
+        self.assertNotIn("User2", output)  # Should not detect normal description
+        self.assertNotIn("User3", output)  # Should not detect None (treated as empty)
     
     def test_export_md_and_json(self):
         """Test MD and JSON exports."""

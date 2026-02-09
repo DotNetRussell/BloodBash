@@ -455,8 +455,8 @@ def print_password_in_descriptions(G, domain_filter=None):
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
         if d['type'].lower() == 'user':
-            props = d.get('props', {})
-            description = props.get('description', '').lower()
+            props = d.get('props') or {}  # Ensure props is always a dict
+            description = (props.get('description') or '').lower()
             if description:
                 for pattern in password_patterns:
                     if re.search(pattern, description, re.IGNORECASE):
