@@ -552,11 +552,6 @@ def print_shadow_credentials(G, domain_filter=None):
 def print_gpo_content_parsing(G, domain_filter=None):
     console.rule("[bold magenta]GPO Content Parsing for Exploitable Settings[/bold magenta]")
     
-    # Debug: confirm we have access to add_finding
-    try:
-        console.print("[bold cyan]DEBUG: add_finding exists →[/bold cyan]", add_finding)
-    except NameError:
-        console.print("[bold red]CRITICAL: add_finding is NOT defined in this scope![/bold red]")
     
     found = False
     exploitable_keys = ['taskname', 'scriptpath', 'scheduledtask', 'TaskName', 'ScriptPath', 'ScheduledTask']
