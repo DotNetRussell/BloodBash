@@ -17,18 +17,18 @@ class MetasploitModule < Msf::Auxiliary
         Requires BloodBash.py (enhanced version) and dependencies (NetworkX, Rich) installed on the system.
       },
       'License'        => MSF_LICENSE,
-      'Author'         => ['Your Name'],  # Replace with your name
+      'Author'         => ['☣️ Mr. The Plague ☣️'],  #
       'References'     => [
         ['URL', 'https://github.com/ly4k/BloodHound'],
-        ['URL', 'https://github.com/YourRepo/BloodBash']  # Update if you have a repo
+        ['URL', 'https://github.com/DotNetRussell/BloodBash']
       ],
       'Platform'       => 'ruby',
       'Arch'           => ARCH_RUBY,
     ))
 
     register_options([
-      OptString.new('BLOODBASH_PATH', [true, 'Path to BloodBash.py script', '/home/kali/BloodBash/BloodBash']),
-      OptString.new('JSON_DIR', [true, 'Directory containing SharpHound JSON files', '/tmp/sharphound_jsons']),
+      OptString.new('BLOODBASH_PATH', [true, 'Path to BloodBash.py script', '~/BloodBash/BloodBash']),
+      OptString.new('JSON_DIR', [true, 'Directory containing SharpHound JSON files', '~/BloodBasSampleSharphoundADData']),
       OptBool.new('ALL_CHECKS', [false, 'Run all analyses (equivalent to --all)', false]),
       OptBool.new('SHORTEST_PATHS', [false, 'Compute shortest paths to high-value targets', false]),
       OptBool.new('DANGEROUS_PERMISSIONS', [false, 'Check dangerous permissions', false]),
@@ -44,9 +44,8 @@ class MetasploitModule < Msf::Auxiliary
       OptBool.new('FAST', [false, 'Enable fast mode (skip heavy computations)', false]),
       OptString.new('DOMAIN', [false, 'Filter by domain (e.g., lab.local)', nil]),
       OptBool.new('INDIRECT', [false, 'Include indirect paths/permissions', false]),
-      OptString.new('EXPORT', [false, 'Export format (md, json, html, csv)', nil, ['md', 'json', 'html', 'csv']]),  # Added choices
-      OptString.new('DB_PATH', [false, 'SQLite DB path for persistence', nil]),
-      OptString.new('RHOSTS', [false, 'Target hosts (dummy for offline tool)', '127.0.0.1']),  # Made optional
+      OptString.new('EXPORT', [false, 'Export format (md, json, html, csv)', nil, ['md', 'json', 'html', 'csv']]),
+      OptString.new('RHOSTS', [false, 'Target hosts (dummy for offline tool)', '127.0.0.1'])
     ])
   end
 
@@ -75,7 +74,6 @@ class MetasploitModule < Msf::Auxiliary
     cmd << '--indirect' if datastore['INDIRECT']
     cmd << "--domain #{datastore['DOMAIN']}" if datastore['DOMAIN']
     cmd << "--export #{datastore['EXPORT']}" if datastore['EXPORT']
-    cmd << "--db #{datastore['DB_PATH']}" if datastore['DB_PATH']
 
     full_cmd = cmd.join(' ')
     print_status("Executing BloodBash: #{full_cmd}")
