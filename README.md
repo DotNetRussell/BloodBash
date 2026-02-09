@@ -1,24 +1,20 @@
-![BloodBash verbose output example](https://i.imgur.com/m5RVnJZ.png)
 
+
+![BloodBash verbose output example](https://i.imgur.com/m5RVnJZ.png)
 # BloodBash 🩸#️
 ![Run Unit Tests](https://github.com/dotnetrussell/bloodbash/actions/workflows/run-tests.yml/badge.svg)
-
 ****BloodBash** is a powerful, standalone BloodHound JSON analyzer written in Python.**
-
 It parses SharpHound (v6+) JSON files offline — no Neo4j or BloodHound GUI needed.
-
 It builds a directed graph using `networkx`, correctly identifies object types, finds attack paths, detects vulnerabilities (especially ADCS ESC1–ESC8), and provides BloodHound-style queries with rich, colored output.
 Perfect for red teamers, OSCP/CRTP prep, and fast AD reconnaissance when you only have raw SharpHound data.
-
 ![BloodBash verbose output example](https://i.imgur.com/zqsjVgC.png)
 ![BloodBash verbose output example](https://i.imgur.com/GtGvchM.png)
 ![BloodBash verbose output example](https://i.imgur.com/tTHVUuy.png)
-
 ## Features
 - Full **SharpHound v6+** support (users, computers, groups, GPOs, OUs, domains, cert templates, Enterprise CAs, Root CAs, NTAuth stores, etc.)
 - Graph construction with relationships and ACLs
 - **Rich colored output** using `rich` (tables, panels, highlighted paths)
-- Progress bars (`tqdm`) during loading and graph building
+- Progress bars `tqdm`) during loading and graph building
 - Modular analysis with BloodHound-inspired queries:
   - Shortest paths to high-value targets
   - Dangerous permissions (GenericAll, Owns, ManageCA, Enroll, etc.)
@@ -29,17 +25,16 @@ Perfect for red teamers, OSCP/CRTP prep, and fast AD reconnaissance when you onl
   - Kerberoastable accounts
   - AS-REP roastable accounts (DONT_REQ_PREAUTH)
   - Session / LocalAdmin summary
+  - **Users with 'Password Never Expires' set** (identifies accounts with persistent passwords)
+  - **Users with 'Password Not Required' set** (high-risk accounts without password barriers)
 - **Verbose mode** — object type counts, user list (top 30 + summary)
-- **Export** results to Markdown or JSON
-- **Fast mode** (`--fast`) — skips heavy pathfinding on large datasets
-- Simple custom query support (`--query`)
-
-![BloodBash verbose output example](https://i.imgur.com/4rbBgDW.png) 
+- **Export** results to Markdown, JSON, or YAML
+- **Fast mode** `--fast`) — skips heavy pathfinding on large datasets
+- Simple custom query support `--query`)
+![BloodBash verbose output example](https://i.imgur.com/4rbBgDW.png)
 ![BloodBash verbose output example](https://i.imgur.com/ODvkG6a.png)
-
-Now includes a metasploit module! 
+Now includes a metasploit module!
 ![BloodBash verbose output example](https://i.imgur.com/EmtEErd.png)
-
 ## Installation
 ```bash
 # Clone the repo
@@ -52,27 +47,25 @@ source venv/bin/activate    # Linux/macOS
 # Install dependencies
 pip install -r requirements.txt
 ```
-
 ## Requirements
 See [requirements.txt](requirements.txt):
 ```
 networkx>=3.0
 rich>=13.0
 tqdm>=4.0
+pyyaml>=6.0
 ```
-
 ## Usage
 ```bash
 # Run everything
 python3 BloodBash.py /path/to/sharphound/json --all
 # Specific analyses
-python3 BloodBash.py ./sharpout --adcs --dangerous-permissions --verbose
+python3 BloodBash.py ./sharpout --adcs --dangerous-permissions --verbose --password-never-expires
 # Export results
-python3 BloodBash.py . --all --export=json
+python3 BloodBash.py . --all --export=yaml
 # Fast mode (skip pathfinding)
 python3 BloodBash.py sharpout --all --fast
 ```
-
 ### Available Flags
 | Flag                        | Description                                          |
 |-----------------------------|------------------------------------------------------|
@@ -85,12 +78,13 @@ python3 BloodBash.py sharpout --all --fast
 | `--sessions`                | Session / LocalAdmin summary                         |
 | `--kerberoastable`          | Kerberoastable accounts                              |
 | `--as-rep-roastable`        | AS-REP roastable accounts                            |
+| `--password-never-expires`  | Detect users with 'Password Never Expires' set       |
+| `--password-not-required`   | Detect users with 'Password Not Required' set        |
 | `--verbose`                 | Show detailed object type & user summary             |
 | `--all`                     | Run all analyses                                     |
-| `--export [md\|json]`        | Export results to file (default: md)                 |
+| `--export [md\|json\|yaml]`  | Export results to file (default: md)                 |
 | `--fast`                    | Skip heavy pathfinding for speed                     |
 If no flags are specified, the script runs in a minimal mode. Use `--all` for full analysis.
-
 ## Example Output
 ```
 ────────────────────────────────────────────────────────────── Resource-Based Constrained Delegation (RBCD) ──────────────────────────────────────────────────────────────
@@ -119,9 +113,7 @@ No RBCD configured computers found
 ────────────────────────────────────────────────────────────── AS-REP Roastable Accounts (DONT_REQ_PREAUTH) ──────────────────────────────────────────────────────────────
 None found
 Completed in 0.08 seconds
-                                                                                                                                    
 ```
-
 ## Contributing
 Pull requests are welcome!  
 Ideas / high-priority additions:
@@ -130,7 +122,6 @@ Ideas / high-priority additions:
 - Shadow Credentials detection
 - HTML export with embedded graphs
 - `--query` DSL improvements
-
 ## License
 MIT License — free to use, modify, and share.
 Happy hunting! 🩸🐕
