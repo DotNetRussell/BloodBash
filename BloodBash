@@ -773,10 +773,10 @@ def print_kerberoastable(G, domain_filter=None):
             console.print(f"  • [cyan]{d['name']}[/cyan]")
             count += 1
             if count >= max_display:
-                remaining = sum(1 for _ in G.nodes(data=True) if _.get('type', '').lower() == 'user' and
-                                get_bool_prop_ci(_.get('props', {}), ['hasspn', 'hasSPN', 'has_spn']) and
-                                not _.get('props', {}).get('sensitive', _.get('props', {}).get('Sensitive', False)) and
-                                _.get('props', {}).get('enabled', _.get('props', {}).get('Enabled', True))) - max_display
+                remaining = sum(1 for n_inner, d_inner in G.nodes(data=True) if d_inner.get('type', '').lower() == 'user' and 
+                                d_inner.get('props', {}).get('hasspn', d_inner.get('props', {}).get('hasSPN', d_inner.get('props', {}).get('has_spn', False))) and 
+                                not d_inner.get('props', {}).get('sensitive', d_inner.get('props', {}).get('Sensitive', False)) and 
+                                d_inner.get('props', {}).get('enabled', d_inner.get('props', {}).get('Enabled', True))) - max_display
                 if remaining > 0:
                     console.print(f"  [dim]... and {remaining} more[/dim]")
                 break
@@ -806,10 +806,10 @@ def print_as_rep_roastable(G, domain_filter=None):
             console.print(f"  • [cyan]{d['name']}[/cyan]")
             count += 1
             if count >= max_display:
-                remaining = sum(1 for _ in G.nodes(data=True) if _.get('type', '').lower() == 'user' and
-                                get_bool_prop_ci(_.get('props', {}), ['dontreqpreauth', 'dontReqPreauth', 'dont_req_preauth']) and
-                                not _.get('props', {}).get('sensitive', _.get('props', {}).get('Sensitive', False)) and
-                                _.get('props', {}).get('enabled', _.get('props', {}).get('Enabled', True))) - max_display
+                remaining = sum(1 for n_inner, d_inner in G.nodes(data=True) if d_inner.get('type', '').lower() == 'user' and 
+                                d_inner.get('props', {}).get('dontreqpreauth', d_inner.get('props', {}).get('dontReqPreauth', d_inner.get('props', {}).get('dont_req_preauth', False))) and 
+                                not d_inner.get('props', {}).get('sensitive', d_inner.get('props', {}).get('Sensitive', False)) and 
+                                d_inner.get('props', {}).get('enabled', d_inner.get('props', {}).get('Enabled', True))) - max_display
                 if remaining > 0:
                     console.print(f"  [dim]... and {remaining} more[/dim]")
                 break
