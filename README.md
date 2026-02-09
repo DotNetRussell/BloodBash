@@ -1,12 +1,18 @@
 
 
 ![BloodBash verbose output example](https://i.imgur.com/m5RVnJZ.png)
+
 # BloodBash 🩸#️
+
 ![Run Unit Tests](https://github.com/dotnetrussell/bloodbash/actions/workflows/run-tests.yml/badge.svg)
+
 ****BloodBash** is a powerful, standalone BloodHound JSON analyzer written in Python.**
+
 It parses SharpHound (v6+) JSON files offline — no Neo4j or BloodHound GUI needed.
+
 It builds a directed graph using `networkx`, correctly identifies object types, finds attack paths, detects vulnerabilities (especially ADCS ESC1–ESC8), and provides BloodHound-style queries with rich, colored output.
 Perfect for red teamers, OSCP/CRTP prep, and fast AD reconnaissance when you only have raw SharpHound data.
+
 ![BloodBash verbose output example](https://i.imgur.com/zqsjVgC.png)
 ![BloodBash verbose output example](https://i.imgur.com/GtGvchM.png)
 ![BloodBash verbose output example](https://i.imgur.com/tTHVUuy.png)
@@ -31,10 +37,15 @@ Perfect for red teamers, OSCP/CRTP prep, and fast AD reconnaissance when you onl
 - **Export** results to Markdown, JSON, or YAML
 - **Fast mode** `--fast`) — skips heavy pathfinding on large datasets
 - Simple custom query support `--query`)
+
+
 ![BloodBash verbose output example](https://i.imgur.com/4rbBgDW.png)
 ![BloodBash verbose output example](https://i.imgur.com/ODvkG6a.png)
+
 Now includes a metasploit module!
+
 ![BloodBash verbose output example](https://i.imgur.com/EmtEErd.png)
+
 ## Installation
 ```bash
 # Clone the repo
@@ -47,6 +58,7 @@ source venv/bin/activate    # Linux/macOS
 # Install dependencies
 pip install -r requirements.txt
 ```
+
 ## Requirements
 See [requirements.txt](requirements.txt):
 ```
