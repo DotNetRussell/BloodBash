@@ -1279,8 +1279,8 @@ def main():
         print_constrained_delegation(G, args.domain)
     if args.laps or run_all:
         print_laps_status(G, args.domain)
-    if args.all or args.gpo_content_dir:
-        print_gpo_content_analysis(G, args)
+#    if args.all or args.gpo_content_dir:
+#        print_gpo_content_analysis(G, args)
     if args.export:
         export_results(G, format_type=args.export, domain_filter=args.domain)
 
