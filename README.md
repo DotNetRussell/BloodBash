@@ -8,11 +8,14 @@
 
 ****BloodBash** is a powerful, standalone BloodHound JSON analyzer written in Python.**
 
-It parses SharpHound (v6+) JSON files offline — no Neo4j or BloodHound GUI needed.
+It parses SharpHound (Bloodhound v6+) JSON files offline — no Neo4j or BloodHound GUI needed.
 
 It builds a directed graph using `networkx`, correctly identifies object types, finds attack paths, detects vulnerabilities (especially ADCS ESC1–ESC8), and provides BloodHound-style queries with rich, colored output.
 Perfect for red teamers, OSCP/CRTP prep, and fast AD reconnaissance when you only have raw SharpHound data.
 
+
+
+![BloodBash verbose output example](https://i.imgur.com/RRUtTD0.png)
 
 ## Installation
 
