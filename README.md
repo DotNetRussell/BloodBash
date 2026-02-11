@@ -50,6 +50,7 @@ python3 BloodBash.py . --all --export=yaml
 # Fast mode (skip pathfinding)
 python3 BloodBash.py sharpout --all --fast
 ```
+
 ### Available Flags
 | Flag                        | Description                                          |
 |-----------------------------|------------------------------------------------------|
@@ -79,19 +80,27 @@ If no flags are specified, the script runs in a minimal mode. Use `--all` for fu
 - **Rich colored output** using `rich` (tables, panels, highlighted paths)
 - Progress bars `tqdm`) during loading and graph building
 - Modular analysis with BloodHound-inspired queries:
+What it shows:
+  - High-value targets identification
+  - ADCS vulnerabilities (ESC1–ESC8)
+  - Dangerous permissions (GenericAll, Owns, etc.)
+  - DCSync / replication rights
+  - RBCD (Resource-Based Constrained Delegation)
+  - Kerberoastable accounts
+  - AS-REP roastable accounts
+  - SID history abuse
+  - Unconstrained delegation
+  - Password in description detection
+  - Sessions and local admin summaries
+  - GPO abuse
+  - Shortest paths to high-value targets
+  - Users with 'Password Never Expires'
+  - Users with 'Password Not Required'
+  - Export to Markdown
+  - Export to HTML (with XSS protection)
   - Shortest paths to high-value targets
   - Dangerous permissions (GenericAll, Owns, ManageCA, Enroll, etc.)
-  - **ADCS ESC1–ESC8 vulnerability detection** (enhanced checks for misconfigurations)
-  - **GPO abuse risks** (dangerous rights on GPOs)
-  - **DCSync / replication rights** on domain objects
-  - **Resource-Based Constrained Delegation (RBCD)**
-  - Kerberoastable accounts
-  - AS-REP roastable accounts (DONT_REQ_PREAUTH)
-  - Session / LocalAdmin summary
-  - **Users with 'Password Never Expires' set** (identifies accounts with persistent passwords)
-  - **Users with 'Password Not Required' set** (high-risk accounts without password barriers)
 - **Verbose mode** — object type counts, user list (top 30 + summary)
-- **Export** results to Markdown, JSON, or YAML
 - **Fast mode** `--fast`) — skips heavy pathfinding on large datasets
 - Simple custom query support `--query`)
 

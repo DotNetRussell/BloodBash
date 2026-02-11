@@ -81,16 +81,23 @@ def print_intro_banner(mode_str):
 
 Parses SharpHound JSON files → finds AD attack paths & misconfigurations
 What it shows:
-• High-value targets (admins, krbtgt, CAs, templates, NTAuth...)
-• AD CS misconfigs (ESC1–ESC8)
-• Dangerous ACLs & permissions (direct & indirect via groups)
-• DCSync / replication rights
-• RBCD opportunities
-• SID history abuse
-• Kerberoastable & AS-REP roastable accounts
-• Weak GPO rights
-• Shortest paths to high-value targets (direct & indirect)
-• Local admin / session summary (when data exists)
+- High-value targets identification
+- ADCS vulnerabilities (ESC1–ESC8)
+- Dangerous permissions (GenericAll, Owns, etc.)
+- DCSync / replication rights
+- RBCD (Resource-Based Constrained Delegation)
+- Kerberoastable accounts
+- AS-REP roastable accounts
+- SID history abuse
+- Unconstrained delegation
+- Password in description detection
+- Sessions and local admin summaries
+- GPO abuse
+- Shortest paths to high-value targets
+- Users with 'Password Never Expires'
+- Export to Markdown
+- Export to HTML (with XSS protection)
+
 Abuse suggestions: Shown once per vulnerable category (when found)
 Common tools: Certipy, Impacket, Rubeus, Mimikatz, SharpGPOAbuse, etc.
 Mode: [cyan]{mode_str}[/cyan]
