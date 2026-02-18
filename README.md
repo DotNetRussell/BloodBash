@@ -1,154 +1,162 @@
 
-
 ![BloodBash verbose output example](https://i.imgur.com/m5RVnJZ.png)
 
 # BloodBash 🩸#️
 
 ![Run Unit Tests](https://github.com/dotnetrussell/bloodbash/actions/workflows/run-tests.yml/badge.svg)
 
-****BloodBash** is a powerful, standalone BloodHound JSON analyzer written in Python.**
+**BloodBash v1.2.3** is a powerful, **standalone** BloodHound / SharpHound JSON analyzer written in Python.
 
-It parses SharpHound (Bloodhound v6+) JSON files offline — no Neo4j or BloodHound GUI needed.
+It parses **real SharpHound collection-per-file JSON** (the format actually produced by SharpHound v6+), builds a full `networkx` directed graph (nodes + all relationships & ACLs), detects attack paths, misconfigurations, and high-impact AD vulnerabilities — **completely offline**, no Neo4j or BloodHound GUI required.
 
-It builds a directed graph using `networkx`, correctly identifies object types, finds attack paths, detects vulnerabilities (especially ADCS ESC1–ESC8), and provides BloodHound-style queries with rich, colored output.
-Perfect for red teamers, OSCP/CRTP prep, and fast AD reconnaissance when you only have raw SharpHound data.
-
-
+Perfect for red teamers, OSCP/CRTP/PNPT prep, quick post-collection triage, or when you only have raw SharpHound JSON dumps.
 
 ![BloodBash verbose output example](https://i.imgur.com/RRUtTD0.png)
+
+## What's New in v1.2.3
+- Fixed & hardened SharpHound collection-per-file parsing (users/, computers/, etc.)
+- **Prioritized Findings** table sorted by severity (ESCs, DCSync, RBCD, etc.)
+- New modules: Shadow Credentials, Password in Description, LAPS status, full GPO XML content parsing (`--gpo-content-dir`), Unconstrained/Constrained Delegation, Trust Abuse, Deep Group Nesting + cycle detection
+- New CLI flags: `--owned`, `--path-from`/`--path-to`, `--inspect`, `--deep-analysis`, `--db` (SQLite persistence), `--export-bh`, `--dot`, `--indirect`, `--debug`
+- Rich abuse-suggestion panels for **every** finding
+- Multiple export formats + BloodHound-compatible JSON + Graphviz DOT
 
 ## Installation
 
 ```bash
-# Clone the repo
-git clone https://github.com/yourusername/bloodbash.git
+git clone https://github.com/dotnetrussell/bloodbash.git
 cd bloodbash
+
 # Recommended: virtual environment
 python3 -m venv venv
-source venv/bin/activate    # Linux/macOS
-# or on Windows: venv\Scripts\activate
-# Install dependencies
+source venv/bin/activate          # Linux/macOS
+# Windows: venv\Scripts\activate
+
 pip install -r requirements.txt
 ```
 
 ## Requirements
-See [requirements.txt](requirements.txt):
-```
+`requirements.txt`:
+```txt
 networkx>=3.0
 rich>=13.0
 tqdm>=4.0
 pyyaml>=6.0
 ```
+(All other dependencies are in the Python standard library.)
+
 ## Usage
+
 ```bash
-# Run everything
+# Full analysis (recommended)
 python3 BloodBash.py /path/to/sharphound/json --all
-# Specific analyses
-python3 BloodBash.py ./sharpout --adcs --dangerous-permissions --verbose --password-never-expires
-# Export results
-python3 BloodBash.py . --all --export=yaml
-# Fast mode (skip pathfinding)
+
+# Selective checks
+python3 BloodBash.py ./sharpout --adcs --dangerous-permissions --dcsync --gpo-abuse --verbose
+
+# Export everything
+python3 BloodBash.py . --all --export=html --export-bh --dot
+
+# Fast mode on huge datasets (skips pathfinding)
 python3 BloodBash.py sharpout --all --fast
+
+# Use SQLite cache for repeated runs
+python3 BloodBash.py . --db bloodbash.db --all
 ```
 
-### Available Flags
-| Flag                        | Description                                          |
-|-----------------------------|------------------------------------------------------|
-| `--shortest-paths`          | Show shortest attack paths to high-value targets     |
-| `--dangerous-permissions`   | Dangerous ACLs on sensitive objects                  |
-| `--adcs`                    | ADCS ESC1–ESC8 vulnerability checks                  |
-| `--gpo-abuse`               | Detect weak GPO permissions                          |
-| `--dcsync`                  | DCSync / replication rights                          |
-| `--rbcd`                    | Resource-Based Constrained Delegation targets        |
-| `--sessions`                | Session / LocalAdmin summary                         |
-| `--kerberoastable`          | Kerberoastable accounts                              |
-| `--as-rep-roastable`        | AS-REP roastable accounts                            |
-| `--password-never-expires`  | Detect users with 'Password Never Expires' set       |
-| `--password-not-required`   | Detect users with 'Password Not Required' set        |
-| `--verbose`                 | Show detailed object type & user summary             |
-| `--all`                     | Run all analyses                                     |
-| `--export [md\|json\|yaml]`  | Export results to file (default: md)                 |
-| `--fast`                    | Skip heavy pathfinding for speed                     |
-If no flags are specified, the script runs in a minimal mode. Use `--all` for full analysis.
+### All Available Flags
+
+| Flag                        | Description |
+|----------------------------|-------------|
+| `--all`                    | Run every analysis module |
+| `--shortest-paths`         | Shortest paths to high-value targets |
+| `--dangerous-permissions`  | Dangerous ACLs on high-value objects |
+| `--adcs`                   | Full ADCS ESC1–ESC8 detection |
+| `--gpo-abuse`              | Weak GPO permissions |
+| `--dcsync`                 | DCSync / replication rights |
+| `--rbcd`                   | Resource-Based Constrained Delegation |
+| `--sessions`               | Sessions / LocalAdmin / RDP / DCOM summary |
+| `--kerberoastable`         | Kerberoastable accounts |
+| `--as-rep-roastable`       | AS-REP roastable accounts |
+| `--sid-history`            | SID History abuse |
+| `--unconstrained-delegation` | Unconstrained delegation |
+| `--password-descriptions`  | Passwords stored in user description |
+| `--password-never-expires` | PasswordNeverExpires users |
+| `--password-not-required`  | PasswordNotRequired users |
+| `--shadow-credentials`     | Shadow Credentials (KeyCredentialLink) |
+| `--gpo-parsing`            | Basic GPO content parsing |
+| `--gpo-content-dir DIR`    | Full GPO XML analysis (Scheduled Tasks, Scripts, cPassword) |
+| `--constrained-delegation` | Constrained delegation |
+| `--laps`                   | LAPS enabled/disabled status |
+| `--verbose`                | Detailed object-type & user summary |
+| `--owned USERS`            | Comma-separated owned principals → paths to them |
+| `--path-from SRC`          | Arbitrary shortest paths: source principals |
+| `--path-to DST`            | Arbitrary shortest paths: target principals |
+| `--inspect NODES`          | Full property + edge dump for specific nodes |
+| `--deep-analysis`          | Enable slow group nesting depth + cycle detection |
+| `--indirect`               | Include indirect paths/permissions via groups |
+| `--domain DOMAIN`          | Filter everything to a single domain |
+| `--export FORMAT`          | Export results (`md`, `json`, `html`, `csv`, `yaml`) |
+| `--export-bh`              | Export full graph as BloodHound-compatible JSON |
+| `--dot [FILE]`             | Export key subgraph to Graphviz DOT |
+| `--db FILE`                | SQLite persistence (save/load graph) |
+| `--fast`                   | Skip heavy pathfinding |
+| `--debug`                  | Verbose debug output |
+
+If **no flags** are given, the tool runs a minimal default mode (verbose summary + common checks).
 
 ![BloodBash verbose output example](https://i.imgur.com/zqsjVgC.png)
 ![BloodBash verbose output example](https://i.imgur.com/GtGvchM.png)
 ![BloodBash verbose output example](https://i.imgur.com/tTHVUuy.png)
-## Features
-- Full **SharpHound v6+** support (users, computers, groups, GPOs, OUs, domains, cert templates, Enterprise CAs, Root CAs, NTAuth stores, etc.)
-- Graph construction with relationships and ACLs
-- **Rich colored output** using `rich` (tables, panels, highlighted paths)
-- Progress bars `tqdm`) during loading and graph building
-- Modular analysis with BloodHound-inspired queries:
-What it shows:
-  - High-value targets identification
-  - ADCS vulnerabilities (ESC1–ESC8)
-  - Dangerous permissions (GenericAll, Owns, etc.)
-  - DCSync / replication rights
-  - RBCD (Resource-Based Constrained Delegation)
-  - Kerberoastable accounts
-  - AS-REP roastable accounts
-  - SID history abuse
-  - Unconstrained delegation
-  - Password in description detection
-  - Sessions and local admin summaries
-  - GPO abuse
-  - Shortest paths to high-value targets
-  - Users with 'Password Never Expires'
-  - Users with 'Password Not Required'
-  - Export to Markdown
-  - Export to HTML (with XSS protection)
-  - Shortest paths to high-value targets
-  - Dangerous permissions (GenericAll, Owns, ManageCA, Enroll, etc.)
-- **Verbose mode** — object type counts, user list (top 30 + summary)
-- **Fast mode** `--fast`) — skips heavy pathfinding on large datasets
-- Simple custom query support `--query`)
 
+## Features
+
+- **Accurate SharpHound v6+ parsing** (handles the real per-collection JSON files with `meta.type`)
+- Full `networkx.MultiDiGraph` with all relationships & ACEs
+- **Rich, colored terminal output** (tables, panels, highlighted paths)
+- Progress bars + live status
+- **Prioritized Findings** sorted by severity score (ESC1-ESC8 = 10, DCSync = 10, RBCD = 9, etc.)
+- Detailed **abuse suggestion panels** with tools & commands for every vulnerability
+- High-value target identification (Domain Admins, krbtgt, CAs, templates, etc.)
+- Complete ADCS ESC1–ESC8 detection with exact conditions
+- Dangerous permissions (GenericAll, ResetPassword, WriteDacl, etc.)
+- GPO abuse + **full XML content analysis** (Scheduled Tasks, Scripts, cPassword)
+- DCSync, RBCD, Kerberoasting, AS-REP roasting, Shadow Credentials, LAPS status, delegation types, SID History, PasswordNeverExpires / PasswordNotRequired
+- Shortest & indirect paths, paths to owned principals, arbitrary custom paths
+- Node inspection, group nesting depth & cycle detection
+- Exports: Markdown, JSON, HTML, CSV, YAML, **BloodHound-compatible JSON**, Graphviz DOT
+- SQLite database persistence (`--db`)
+- Domain filtering, fast mode, debug mode
 
 ![BloodBash verbose output example](https://i.imgur.com/4rbBgDW.png)
 ![BloodBash verbose output example](https://i.imgur.com/ODvkG6a.png)
 
-Now includes a metasploit module!
-
-![BloodBash verbose output example](https://i.imgur.com/EmtEErd.png)
-
-## Example Output
+## Example Output (abridged)
 ```
-────────────────────────────────────────────────────────────── Resource-Based Constrained Delegation (RBCD) ──────────────────────────────────────────────────────────────
-No RBCD configured computers found
-────────────────────────────────────────────────────────────────────── Session / LocalAdmin Summary ──────────────────────────────────────────────────────────────────────
-        Top Local Admins        
-┏━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━┓
-┃ Principal ┃ Count ┃ Examples ┃
-┡━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━┩
-└───────────┴───────┴──────────┘
-──────────────────────────────────────────────────────────────────────── Kerberoastable Accounts ─────────────────────────────────────────────────────────────────────────
-  • SQL_SVC
-  • WEB_SVC
-╭────────────────────────────────────────────────────────────────── Abuse Suggestions: Kerberoastable ───────────────────────────────────────────────────────────────────╮
-│                                                                                                                                                                        │
-│ Impact: Request TGS → offline crack weak service account password.                                                                                                     │
-│                                                                                                                                                                        │
-│ Tool: Impacket                                                                                                                                                         │
-│                                                                                                                                                                        │
-│ GetUserSPNs.py -request -outputfile hashes.txt domain/user:password@domain.local                                                                                       │
-│                                                                                                                                                                        │
-│ Crack:                                                                                                                                                                 │
-│ hashcat -m 13100 hashes.txt wordlist.txt                                                                                                                               │
-│                                                                                                                                                                        │
-╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-────────────────────────────────────────────────────────────── AS-REP Roastable Accounts (DONT_REQ_PREAUTH) ──────────────────────────────────────────────────────────────
-None found
-Completed in 0.08 seconds
+────────────────────────────────────────────────────────────── ADCS ESC Vulnerabilities (ESC1–ESC8) ──────────────────────────────────────────────────────────────
+[red]ESC1/ESC2[/red]: WebServerTemplate (Enroll + EnrolleeSuppliesSubject + no approval)
+  → CONTOSO\Tier1Admins can Enroll
+────────────────────────────────────────────────────────────── Prioritized Findings by Severity ──────────────────────────────────────────────────────────────
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Severity Score  ┃ Category            ┃ Details                                                                                                                                                                                                                       ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ 10              │ ESC1-ESC8           │ ESC1/2 on WebServerTemplate                                                                                                                                                                                                   │
+│ 10              │ DCSync              │ CONTOSO\svc_sql can DCSync on contoso.local                                                                                                                                                                                  │
+└─────────────────┴─────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Completed in 12.45 seconds
 ```
+
 ## Contributing
-Pull requests are welcome!  
-Ideas / high-priority additions:
-- Full path chaining for ADCS ESC scenarios
-- GPO change parsing (Scheduled Tasks, etc.)
-- Shadow Credentials detection
-- HTML export with embedded graphs
-- `--query` DSL improvements
+Pull requests welcome!  
+High-priority ideas:
+- Full ADCS attack-path chaining
+- More export formats (PlantUML, Mermaid)
+- Integration with BloodHound Enterprise / custom collectors
+- Performance optimizations for 100k+ node domains
+
 ## License
-MIT License — free to use, modify, and share.
+MIT License — free to use, modify, and share for authorized security testing and red teaming only.
+
 Happy hunting! 🩸🐕
+
+
