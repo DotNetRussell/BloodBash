@@ -18,9 +18,8 @@ import yaml
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import traceback
-__version__ = "1.2.3"  # Fixed SharpHound collection-per-file format
+__version__ = "1.3.1"  
 console = Console()
-
 # ────────────────────────────────────────────────
 # Severity Scoring
 # ────────────────────────────────────────────────
@@ -31,6 +30,9 @@ SEVERITY_SCORES = {
     "Password Not Required": 8, "Shadow Credentials": 8, "GPO Content": 7,
     "Constrained Delegation": 7, "LAPS": 6, "Owned Paths": 9,
     "Arbitrary Paths": 6, "Trust Abuse": 7, "Deep Group Nesting": 6,
+    # Azure-specific
+    "Azure Privileged Roles": 10, "Azure App Secrets": 9, "Azure MFA Bypass": 8,
+    "Azure Guest Access": 7, "Azure Service Principal Abuse": 8,
 }
 global_findings = []
 def add_finding(category, details, score=None):
@@ -51,15 +53,13 @@ def print_prioritized_findings():
     console.print(table)
     if len(sorted_findings) > 20:
         console.print(f"[dim]... and {len(sorted_findings) - 20} more[/dim]")
-
 # ────────────────────────────────────────────────
 # Intro Banner
 # ────────────────────────────────────────────────
 def print_intro_banner(mode_str):
-    console.rule(f"[bold magenta]BloodBash v{__version__} - SharpHound Offline Analyzer[/bold magenta]", style="magenta")
+    console.rule(f"[bold magenta]BloodBash v{__version__} - SharpHound & AzureHound Offline Analyzer[/bold magenta]", style="magenta")
     console.print(Panel(
         f"""
-
                                                                                              
 [red]@@@@@@@   @@@        @@@@@@    @@@@@@   @@@@@@@      @@@@@@@    @@@@@@    @@@@@@   @@@  @@@[/red]  
 [red]@@@@@@@@  @@@       @@@@@@@@  @@@@@@@@  @@@@@@@@     @@@@@@@@  @@@@@@@@  @@@@@@@   @@@  @@@[/red]    
@@ -72,9 +72,9 @@ def print_intro_banner(mode_str):
 [red] :: ::::   :: ::::  ::::: ::  ::::: ::   :::: ::      :: ::::  ::   :::  :::: ::   ::   :::[/red]    
 [red]:: : ::   : :: : :   : :  :    : :  :   :: :  :      :: : ::    :   : :  :: : :     :   : :[/red]    
                                                                                              
-
-Parses SharpHound JSON files → finds AD attack paths & misconfigurations
+Parses SharpHound & AzureHound JSON files → finds AD/Azure attack paths & misconfigurations
 Mode: [cyan]{mode_str}[/cyan]
+Supports both Active Directory (SharpHound) and Azure AD (AzureHound) data.
 For authorized security testing / red teaming only.
 Use --help for all options.
 """,
@@ -83,25 +83,28 @@ Use --help for all options.
         padding=(1, 2)
     ))
     console.print("[bold]Color guide:[/bold]")
-    console.print("  [red]Red[/red]          = Critical findings (ESCs, DCSync, dangerous rights)")
-    console.print("  [yellow]Yellow[/yellow]       = Medium risk (weak GPOs, roastable accounts)")
+    console.print("  [red]Red[/red]          = Critical findings (ESCs, DCSync, Azure privileged roles)")
+    console.print("  [yellow]Yellow[/yellow]       = Medium risk (weak GPOs, roastable accounts, Azure MFA bypass)")
     console.print("  [green]Green[/green]        = No issues / success / principals with rights")
     console.print("  [cyan]Cyan[/cyan]         = Object names, targets, templates, types, counts")
     console.print("  [magenta]Magenta[/magenta]      = Section headers & dividers only")
     console.print("  [dim]Dim[/dim]          = Minor notes or empty results\n")
-
 # ────────────────────────────────────────────────
-# Type Mapping
+# Type Mapping (Extended for Azure)
 # ────────────────────────────────────────────────
 TYPE_FROM_META = {
+    # SharpHound AD types
     "users": "User", "computers": "Computer", "groups": "Group", "gpos": "GPO",
     "ous": "OU", "domains": "Domain", "containers": "Container",
     "certtemplates": "Certificate Template", "enterprisecas": "Enterprise CA",
     "rootcas": "Root CA", "aiacas": "AIA CA", "ntauthstores": "NTAuth Store",
+    # AzureHound types (added support)
+    "azureusers": "Azure User", "azuregroups": "Azure Group", "azureapplications": "Azure Application",
+    "azureserviceprincipals": "Azure Service Principal", "azuretenants": "Azure Tenant",
+    "azureroles": "Azure Role", "azuredevices": "Azure Device", "azurekeyvaults": "Azure Key Vault",
 }
-
 # ────────────────────────────────────────────────
-# Abuse Suggestions Helper
+# Abuse Suggestions Helper (Extended for Azure)
 # ────────────────────────────────────────────────
 def print_abuse_panel(vuln_type: str):
     title = f"Abuse Suggestions: {vuln_type}"
@@ -153,14 +156,35 @@ Tool: Impacket rbcd.py
         content = """
 [yellow]Impact:[/yellow] Users with passwords stored in plain text in their AD description field can be exploited for credential theft.
 """
+    elif vuln_type == "Azure Privileged Roles":
+        content = """
+[bold red]Impact:[/bold red] Users with high-privilege Azure roles (e.g., Global Admin) can compromise the entire tenant.
+Tools: Azure CLI, AzureAD PowerShell, or AzureHound for path finding.
+"""
+    elif vuln_type == "Azure App Secrets":
+        content = """
+[bold red]Impact:[/bold red] Applications with exposed secrets or certificates → service account takeover, tenant compromise.
+Tools: Azure CLI, MSOL PowerShell.
+"""
+    elif vuln_type == "Azure MFA Bypass":
+        content = """
+[bold yellow]Impact:[/bold yellow] Users without MFA can be phished or password sprayed easily.
+Tools: Azure AD tools for MFA enforcement.
+"""
+    elif vuln_type == "Azure Guest Access":
+        content = """
+[bold yellow]Impact:[/bold yellow] Guest users may have elevated access; potential for lateral movement.
+"""
+    elif vuln_type == "Azure Service Principal Abuse":
+        content = """
+[bold red]Impact:[/bold red] Service Principals with excessive permissions → resource manipulation or data exfiltration.
+Tools: Azure CLI, Azure Graph API.
+"""
     if content:
         console.print(Panel(content, title=title, border_style=border))
     else:
         console.print(f"[dim]No abuse example defined for {vuln_type}[/dim]")
 
-# ────────────────────────────────────────────────
-# FIXED Loading (handles real SharpHound files)
-# ────────────────────────────────────────────────
 def load_json_dir(directory, debug=False):
     nodes = {}
     try:
@@ -180,36 +204,55 @@ def load_json_dir(directory, debug=False):
                     if debug:
                         console.print(f"[blue]DEBUG: Top-level keys: {list(raw.keys())}[/blue]")
                     meta_type = raw.get("meta", {}).get("type", "").lower()
-                    obj_type = TYPE_FROM_META.get(meta_type, "Unknown")
-                    # Handle real SharpHound format: data under plural key (users, computers, etc.)
-                    data = None
-                    if meta_type and meta_type in raw and isinstance(raw[meta_type], list):
-                        data = raw[meta_type]
-                        if debug:
-                            console.print(f"[blue]DEBUG: Using collection key '{meta_type}' (list of {len(data)} items)[/blue]")
-                    else:
-                        data = raw.get('data') or raw.get('Results') or raw.get('objects') or raw
-                        if debug:
-                            console.print(f"[blue]DEBUG: Fallback data source used[/blue]")
+                    data = raw.get('data') or raw.get('Results') or raw.get('objects') or raw
+                    if debug:
+                        console.print(f"[blue]DEBUG: data type: {type(data)}, len if list: {len(data) if isinstance(data, list) else 'not list'}[/blue]")
                     if not isinstance(data, list):
                         data = [data] if data and isinstance(data, dict) else []
                     added = 0
                     for item in data:
                         if not isinstance(item, dict):
                             continue
-                        oid = item.get('ObjectIdentifier') or item.get('objectid') or item.get('ObjectId')
-                        if not oid:
-                            if 'start' in item and 'end' in item:
-                                nodes[f"rel_{len(nodes)}"] = item
-                                added += 1
-                            continue
-                        if 'ObjectType' not in item and 'Type' not in item:
-                            item['ObjectType'] = obj_type
-                        props = item.get('Properties', {})
-                        if 'type' in props and props['type']:
-                            item['ObjectType'] = props['type']
+                        # Detect Azure (case-insensitive checks, expanded)
+                        item_lower = {k.lower(): v for k, v in item.items()}
+                        is_azure = meta_type.startswith("azure") or any(k in ['@odata.context', 'odata.context', 'cloudanchorobject'] for k in item_lower.keys()) or any(v and isinstance(v, str) and ('microsoft.com' in v.lower() or 'azure' in v.lower()) for v in item_lower.values() if isinstance(v, str))
+                        # Infer type for Azure using 'kind' field (from AzureHound structure)
+                        if is_azure:
+                            item['IsAzure'] = True
+                            obj_type = "Unknown Azure"
+                            kind = item.get('kind', '').lower()
+                            if 'tenant' in kind:
+                                obj_type = "Azure Tenant"
+                            elif 'device' in kind:
+                                obj_type = "Azure Device"
+                            elif 'user' in kind:
+                                obj_type = "Azure User"
+                            elif 'group' in kind:
+                                obj_type = "Azure Group"
+                            elif 'role' in kind:
+                                obj_type = "Azure Role"
+                            elif 'application' in kind:
+                                obj_type = "Azure Application"
+                            elif 'serviceprincipal' in kind or 'sp' in kind:
+                                obj_type = "Azure Service Principal"
+                            elif 'keyvault' in kind:
+                                obj_type = "Azure Key Vault"
+                            # Fallback to 'type' field if available
+                            if obj_type == "Unknown Azure":
+                                typ = item.get('type') or item.get('Type')
+                                if typ:
+                                    obj_type = f"Azure {typ.title()}"
+                        else:
+                            obj_type = TYPE_FROM_META.get(meta_type, "Unknown")
+                        item['ObjectType'] = obj_type
+                        # OID from data.id for Azure
+                        oid = item.get('data', {}).get('id') or item.get('ObjectIdentifier') or item.get('objectid') or item.get('ObjectId') or item.get('id') or str(hash(json.dumps(item)))
                         nodes[oid] = item
                         added += 1
+                        if debug and added <= 3:  # Print first 3 items for inspection
+                            console.print(f"[blue]DEBUG: Sample item keys: {list(item.keys())}[/blue]")
+                            console.print(f"[blue]DEBUG: Sample item type: {obj_type}[/blue]")
+                            console.print(f"[blue]DEBUG: Sample item sample data: {dict(list(item.get('data', {}).items())[:10])}[/blue]")
                     if debug:
                         console.print(f"[blue]DEBUG: {filename} → {added} objects added[/blue]")
             except Exception as e:
@@ -229,33 +272,32 @@ def build_graph(nodes, db_path=None, debug=False):
         console.print(f"[blue]DEBUG: Starting graph build with {len(nodes)} raw nodes[/blue]")
     with tqdm(total=len(nodes), desc="Building graph", unit="node") as pbar:
         for oid, node in nodes.items():
-            props = node.get('Properties', {}).copy()
-            for key in ['EnrolleeSuppliesSubject', 'RequiresManagerApproval',
-                        'EDITF_ATTRIBUTESUBJECTALTNAME2', 'enrolleesuppliessubject',
-                        'requiresmanagerapproval', 'editf_attributesubjectaltname2']:
-                if key in node:
-                    props[key] = node[key]
-            name = props.get('name') or props.get('Name') or oid
+            is_azure = node.get('IsAzure', False)
+            # For Azure, props are in node['data']
+            props = node['data'] if is_azure and 'data' in node else node.get('Properties', node)
+            name = props.get('name') or props.get('Name') or props.get('displayName') or oid
             name_norm = name.upper().split('@')[0]
-            obj_type = (
-                node.get('ObjectType') or node.get('Type') or props.get('type') or 'Unknown'
-            ).capitalize()
+            obj_type = node.get('ObjectType') or node.get('Type') or props.get('type') or 'Unknown'
             if not oid.startswith('rel_'):
-                G.add_node(oid, name=name, type=obj_type, props=props)
+                G.add_node(oid, name=name, type=obj_type, props=props, is_azure=is_azure)
                 name_to_oid[name_norm] = oid
+            # Check for standalone relationships (various formats)
             if 'start' in node and 'end' in node and 'label' in node:
                 relationship_edges.append((node['start'], node['end'], node['label']))
-            data_items = node.get('data', []) if 'data' in node else []
-            if not isinstance(data_items, list):
-                data_items = [data_items] if data_items else []
-            for rel in data_items:
-                start = rel.get('start')
-                end = rel.get('end')
-                label = rel.get('label')
-                if start and end and label:
-                    relationship_edges.append((start, end, label))
-            for key in ['MemberOf', 'AdminTo', 'HasSession', 'AllowedToAct', 'HasSIDHistory']:
-                rels = node.get(key, [])
+            elif 'from' in node and 'to' in node and 'relationship' in node:
+                relationship_edges.append((node['from'], node['to'], node['relationship']))
+            elif 'source' in node and 'target' in node and ('type' in node or 'label' in node):
+                relationship_edges.append((node['source'], node['target'], node.get('type') or node.get('label')))
+            # AD relationships (case-insensitive for Azure too)
+            ad_rels = ['MemberOf', 'AdminTo', 'HasSession', 'AllowedToAct', 'HasSIDHistory']
+            for key in ad_rels:
+                rels = None
+                for nk in node.keys():
+                    if nk.lower() == key.lower():
+                        rels = node[nk]
+                        break
+                if rels is None:
+                    continue
                 if not isinstance(rels, list):
                     rels = [rels] if rels else []
                 for rel in rels:
@@ -268,6 +310,36 @@ def build_graph(nodes, db_path=None, debug=False):
                 right = ace.get('RightName')
                 if principal and right and principal in nodes:
                     G.add_edge(principal, oid, label=right)
+            # Azure relationships (case-insensitive, expanded)
+            azure_rels = ['MemberOf', 'HasRole', 'Owns', 'CanRead', 'CanWrite', 'CanDelete', 'Execute', 'AddMembers', 'ResetPassword', 'AddSecret', 'AddCertificate', 'AddOwner', 'GetChanges', 'GetChangesAll', 'GenericAll', 'GenericWrite', 'WriteDacl', 'WriteOwner']
+            for key in azure_rels:
+                rels = None
+                for nk in node.keys():
+                    if nk.lower() == key.lower():
+                        rels = node[nk]
+                        break
+                if rels is None:
+                    continue
+                if not isinstance(rels, list):
+                    rels = [rels] if rels else []
+                for rel in rels:
+                    target = rel.get('ObjectIdentifier') or rel.get('id') if isinstance(rel, dict) else rel
+                    if target and target in nodes:
+                        G.add_edge(oid, target, label=key)
+            # Handle Azure 'Relationships' property if present
+            if is_azure:
+                rels_prop = None
+                for nk in node.keys():
+                    if nk.lower() == 'relationships':
+                        rels_prop = node[nk]
+                        break
+                if rels_prop and isinstance(rels_prop, list):
+                    for rel in rels_prop:
+                        if isinstance(rel, dict):
+                            rel_type = rel.get('RelationshipType') or rel.get('relationshipType') or rel.get('type')
+                            target = rel.get('TargetObjectId') or rel.get('targetObjectId') or rel.get('target')
+                            if rel_type and target and target in nodes:
+                                G.add_edge(oid, target, label=rel_type)
             pbar.update(1)
     if debug:
         console.print(f"[blue]DEBUG: Main graph build complete - {G.number_of_nodes()} nodes, {G.number_of_edges()} edges[/blue]")
@@ -285,7 +357,7 @@ def build_graph(nodes, db_path=None, debug=False):
         else:
             start_oid = f"placeholder_{placeholder_counter}"
             placeholder_counter += 1
-            G.add_node(start_oid, name=start, type='Unknown', props={})
+            G.add_node(start_oid, name=start, type='Unknown', props={}, is_azure=False)
             name_to_oid[start_norm] = start_oid
             placeholders_added += 1
         end_oid = None
@@ -296,7 +368,7 @@ def build_graph(nodes, db_path=None, debug=False):
         else:
             end_oid = f"placeholder_{placeholder_counter}"
             placeholder_counter += 1
-            G.add_node(end_oid, name=end, type='Unknown', props={})
+            G.add_node(end_oid, name=end, type='Unknown', props={}, is_azure=False)
             name_to_oid[end_norm] = end_oid
             placeholders_added += 1
         if start_oid and end_oid:
@@ -313,24 +385,23 @@ def build_graph(nodes, db_path=None, debug=False):
 def save_graph_to_db(G, db_path):
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS nodes (oid TEXT PRIMARY KEY, name TEXT, type TEXT, props TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS nodes (oid TEXT PRIMARY KEY, name TEXT, type TEXT, props TEXT, is_azure INTEGER)''')
     c.execute('''CREATE TABLE IF NOT EXISTS edges (start_oid TEXT, end_oid TEXT, label TEXT)''')
     for n, d in G.nodes(data=True):
-        c.execute("INSERT OR REPLACE INTO nodes VALUES (?, ?, ?, ?)", (n, d['name'], d['type'], json.dumps(d['props'])))
+        c.execute("INSERT OR REPLACE INTO nodes VALUES (?, ?, ?, ?, ?)", (n, d['name'], d['type'], json.dumps(d['props']), int(d.get('is_azure', False))))
     for u, v, d in G.edges(data=True):
         c.execute("INSERT INTO edges VALUES (?, ?, ?)", (u, v, d['label']))
     conn.commit()
     conn.close()
     console.print(f"[green]Graph saved to DB: {db_path}[/green]")
-
 def load_graph_from_db(db_path):
     G = nx.MultiDiGraph()
     name_to_oid = {}
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
-    c.execute("SELECT oid, name, type, props FROM nodes")
-    for oid, name, typ, props in c.fetchall():
-        G.add_node(oid, name=name, type=typ, props=json.loads(props))
+    c.execute("SELECT oid, name, type, props, is_azure FROM nodes")
+    for oid, name, typ, props, is_azure in c.fetchall():
+        G.add_node(oid, name=name, type=typ, props=json.loads(props), is_azure=bool(is_azure))
         name_to_oid[name.upper().split('@')[0]] = oid
     c.execute("SELECT start_oid, end_oid, label FROM edges")
     for u, v, label in c.fetchall():
@@ -338,33 +409,38 @@ def load_graph_from_db(db_path):
     conn.close()
     console.print(f"[green]Graph loaded from DB: {db_path}[/green]")
     return G, name_to_oid
-
 # ────────────────────────────────────────────────
-# VERBOSE SUMMARY
+# VERBOSE SUMMARY (Extended for Azure)
 # ────────────────────────────────────────────────
 def print_verbose_summary(G, domain_filter=None):
     console.rule("[bold magenta]VERBOSE SUMMARY[/bold magenta]")
     types_count = defaultdict(int)
+    azure_count = 0
+    ad_count = 0
     for _, d in G.nodes(data=True):
-        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter and d.get('props', {}).get('tenantId') != domain_filter:
             continue
         types_count[d['type']] += 1
+        if d.get('is_azure', False):
+            azure_count += 1
+        else:
+            ad_count += 1
     table = Table(title="Object Types", show_header=True, header_style="bold cyan")
     table.add_column("Type", style="green")
     table.add_column("Count", justify="right")
     for t, cnt in sorted(types_count.items(), key=lambda x: x[1], reverse=True):
         table.add_row(t, str(cnt))
     console.print(table)
-    users = [d['name'] for _, d in G.nodes(data=True) if d['type'].lower() == 'user' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]
+    console.print(f"[cyan]AD Objects: {ad_count} | Azure Objects: {azure_count}[/cyan]")
+    users = [d['name'] for _, d in G.nodes(data=True) if d['type'].lower() in ['user', 'azure user'] and (not domain_filter or d.get('props', {}).get('domain') == domain_filter or d.get('props', {}).get('tenantId') == domain_filter)]
     if users:
-        console.print(f"\n[bold cyan]Users ({len(users)}):[/bold cyan]")
+        console.print(f"\n[bold cyan]Users (AD + Azure) ({len(users)}):[/bold cyan]")
         for name in sorted(users)[:30]:
             console.print(f"  • {name}")
     else:
         console.print("\n[yellow]No User objects found[/yellow]")
-
 # ────────────────────────────────────────────────
-# Helpers
+# Helpers (Extended for Azure)
 # ────────────────────────────────────────────────
 def get_bool_prop_ci(props, keys, default=False):
     if not isinstance(props, dict):
@@ -374,23 +450,27 @@ def get_bool_prop_ci(props, keys, default=False):
             if p_key.lower() == key.lower():
                 return bool(props[p_key])
     return default
-
 def get_high_value_targets(G, domain_filter=None):
-    keywords = [
+    ad_keywords = [
         'domain admins', 'enterprise admins', 'schema admins', 'administrators',
         'krbtgt', 'domain controllers', 'dnsadmins', 'enterprise key admins',
         'certificate template', 'enterprise ca', 'root ca', 'ntauth','dc'
     ]
+    azure_keywords = [
+        'global admin', 'user admin', 'application admin', 'exchange admin', 'sharepoint admin',
+        'azure ad join', 'intune admin', 'security admin', 'conditional access admin', 'privileged role admin'
+    ]
     targets = []
     for n, d in G.nodes(data=True):
-        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter and d.get('props', {}).get('tenantId') != domain_filter:
             continue
         name = d['name'].lower()
         typ = d['type'].lower()
-        if any(k in name for k in keywords) or 'ca' in typ or 'template' in typ or 'ntauth' in typ:
+        is_azure = d.get('is_azure', False)
+        keywords = azure_keywords if is_azure else ad_keywords
+        if any(k in name for k in keywords) or ('ca' in typ and not is_azure) or ('role' in typ and is_azure):
             targets.append((n, d['name'], d['type']))
     return sorted(targets, key=lambda x: x[1])
-
 def format_path(G, path):
     if not path or len(path) < 1:
         return "[dim]Invalid path[/dim]"
@@ -404,7 +484,6 @@ def format_path(G, path):
         parts.append(f"[bold cyan]{G.nodes[u]['name']}[/bold cyan] --[[yellow]{label}[/yellow]]-->")
     parts.append(f"[bold red]{G.nodes[path[-1]]['name']}[/bold red]")
     return " ".join(parts)
-
 def get_indirect_paths(G, source, target, max_depth=5):
     paths = []
     try:
@@ -414,16 +493,17 @@ def get_indirect_paths(G, source, target, max_depth=5):
         return paths[:5]
     except nx.NetworkXNoPath:
         return []
-
 # ────────────────────────────────────────────────
-# All analysis functions (unchanged)
+# All analysis functions (unchanged except where noted)
 # ────────────────────────────────────────────────
 def print_password_in_descriptions(G, domain_filter=None):
-    console.rule("[bold magenta]Passwords in User Descriptions[/bold magenta]")
+    console.rule("[bold magenta]Passwords in User Descriptions (AD)[/bold magenta]")
     found = False
     password_patterns = [r'password\s*:', r'pwd\s*:', r'pass\s*:', r'credentials\s*:', r'login\s*:', r'account\s*:', r'admin\s*:', r'secret\s*:', r'key\s*:']
     import re
     for n, d in G.nodes(data=True):
+        if d.get('is_azure', False):  # Skip Azure for AD-specific checks
+            continue
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
         if d['type'].lower() == 'user':
@@ -442,9 +522,11 @@ def print_password_in_descriptions(G, domain_filter=None):
         console.print("[green]No passwords detected in user descriptions[/green]")
 
 def print_password_never_expires(G, domain_filter=None):
-    console.rule("[bold magenta]Users with 'Password Never Expires' Set[/bold magenta]")
+    console.rule("[bold magenta]Users with 'Password Never Expires' Set (AD)[/bold magenta]")
     found = False
     for n, d in G.nodes(data=True):
+        if d.get('is_azure', False):
+            continue
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
         if d['type'].lower() == 'user':
@@ -460,9 +542,11 @@ def print_password_never_expires(G, domain_filter=None):
         console.print("[green]No users with 'Password Never Expires' found[/green]")
 
 def print_password_not_required(G, domain_filter=None):
-    console.rule("[bold magenta]Users with 'Password Not Required' Set[/bold magenta]")
+    console.rule("[bold magenta]Users with 'Password Not Required' Set (AD)[/bold magenta]")
     found = False
     for n, d in G.nodes(data=True):
+        if d.get('is_azure', False):
+            continue
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
         if d['type'].lower() == 'user':
@@ -478,9 +562,11 @@ def print_password_not_required(G, domain_filter=None):
         console.print("[green]No users with 'Password Not Required' found[/green]")
 
 def print_shadow_credentials(G, domain_filter=None):
-    console.rule("[bold magenta]Shadow Credentials Detection[/bold magenta]")
+    console.rule("[bold magenta]Shadow Credentials Detection (AD)[/bold magenta]")
     found = False
     for n, d in G.nodes(data=True):
+        if d.get('is_azure', False):
+            continue
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
         if d['type'].lower() == 'user':
@@ -491,15 +577,17 @@ def print_shadow_credentials(G, domain_filter=None):
                 console.print(f"[red]Shadow Credentials detected[/red]: [green]{d['name']}[/green]")
                 add_finding("Shadow Credentials", f"User {d['name']} has Shadow Credentials configured")
     if found:
-        console.print(Panel("[bold red]Impact:[/bold red] Allows adding keys for authentication without changing password → persistent access.\n[bold]Abuse:[/bold] Use tools like Whisker or DSInternals to add keys and impersonate.\n[bold]Mitigation:[/bold] Disable KeyCredentialLink or monitor for changes.\n[bold]Tools:[/bold] Whisker[](https://github.com/eladshamir/Whisker), DSInternals.", title="Abuse Suggestions: Shadow Credentials", border_style="red"))
+        print_abuse_panel("Shadow Credentials")
     else:
         console.print("[green]No accounts with Shadow Credentials found[/green]")
 
 def print_gpo_content_parsing(G, domain_filter=None):
-    console.rule("[bold magenta]GPO Content Parsing for Exploitable Settings[/bold magenta]")
+    console.rule("[bold magenta]GPO Content Parsing for Exploitable Settings (AD)[/bold magenta]")
     found = False
     exploitable_keys = ['taskname', 'scriptpath', 'scheduledtask', 'TaskName', 'ScriptPath', 'ScheduledTask']
     for n, d in G.nodes(data=True):
+        if d.get('is_azure', False):
+            continue
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
         if d.get('type', '').lower() != 'gpo':
@@ -518,12 +606,12 @@ def print_gpo_content_parsing(G, domain_filter=None):
             detail = f"GPO '{name}' has exploitable content: {', '.join(found_keys)}"
             add_finding("GPO Content", detail)
     if found:
-        console.print("[yellow]At least one exploitable GPO found[/yellow]")
+        print_abuse_panel("GPO Abuse")
     else:
         console.print("[green]No exploitable GPO content found[/green]")
-
+        
 def print_gpo_content_analysis(G, gpo_content_dir: str, domain_filter=None):
-    console.rule("[bold magenta]GPO Content Analysis – Scheduled Tasks / Scripts / cPassword[/bold magenta]")
+    console.rule("[bold magenta]GPO Content Analysis – Scheduled Tasks / Scripts / cPassword (AD)[/bold magenta]")
     if not gpo_content_dir or not Path(gpo_content_dir).is_dir():
         console.print("[yellow]--gpo-content-dir not provided or invalid. Skipping XML analysis.[/yellow]")
         return
@@ -570,9 +658,11 @@ def print_gpo_content_analysis(G, gpo_content_dir: str, domain_filter=None):
         console.print("[green]No exploitable scheduled tasks, scripts, or cPasswords found in GPO XMLs[/green]")
 
 def print_constrained_delegation(G, domain_filter=None):
-    console.rule("[bold magenta]Constrained Delegation Detection[/bold magenta]")
+    console.rule("[bold magenta]Constrained Delegation Detection (AD)[/bold magenta]")
     found = False
     for n, d in G.nodes(data=True):
+        if d.get('is_azure', False):
+            continue
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
         if d['type'].lower() == 'computer':
@@ -586,13 +676,13 @@ def print_constrained_delegation(G, domain_filter=None):
                     console.print(f"  → Allowed to delegate to: {', '.join(allowed_to_delegate_to)}")
                 add_finding("Constrained Delegation", f"Computer {d['name']} has Constrained Delegation")
     if found:
-        console.print(Panel("[bold yellow]Impact:[/bold yellow] Allows impersonation of users to specific services.\n[bold]Abuse:[/bold] Use S4U2Self/S4U2Proxy to relay authentication.\n[bold]Mitigation:[/bold] Limit delegation targets; use resource-based constraints.\n[bold]Tools:[/bold] Rubeus, Impacket.", title="Abuse Suggestions: Constrained Delegation", border_style="yellow"))
+        print_abuse_panel("Constrained Delegation")
     else:
         console.print("[green]No Constrained Delegation found[/green]")
 
 def print_laps_status(G, domain_filter=None):
-    console.rule("[bold magenta]LAPS (Local Administrator Password Solution) Status[/bold magenta]")
-    computers = [d for _, d in G.nodes(data=True) if d['type'].lower() == 'computer' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]
+    console.rule("[bold magenta]LAPS (Local Administrator Password Solution) Status (AD)[/bold magenta]")
+    computers = [d for _, d in G.nodes(data=True) if d['type'].lower() == 'computer' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter) and not d.get('is_azure', False)]
     if not computers:
         console.print("[green]No computers found[/green]")
         return
@@ -614,9 +704,11 @@ def print_laps_status(G, domain_filter=None):
         console.print(Panel("[bold yellow]Impact:[/bold yellow] Local admin passwords may be weak or shared → easy compromise.\n[bold]Mitigation:[/bold] Enable LAPS to randomize and secure passwords.\n[bold]Tools:[/bold] LAPS deployment scripts.", title="LAPS Not Enabled", border_style="yellow"))
 
 def print_unconstrained_delegation(G, domain_filter=None):
-    console.rule("[bold magenta]Unconstrained Delegation Detection[/bold magenta]")
+    console.rule("[bold magenta]Unconstrained Delegation Detection (AD)[/bold magenta]")
     found = False
     for n, d in G.nodes(data=True):
+        if d.get('is_azure', False):
+            continue
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
         if d['type'].lower() == 'computer':
@@ -632,10 +724,12 @@ def print_unconstrained_delegation(G, domain_filter=None):
         console.print("[green]No unconstrained delegation found[/green]")
 
 def print_sid_history_abuse(G, domain_filter=None):
-    console.rule("[bold magenta]SID History Abuse[/bold magenta]")
+    console.rule("[bold magenta]SID History Abuse (AD)[/bold magenta]")
     found = False
     high_priv_groups = {'domain admins', 'enterprise admins', 'administrators', 'schema admins'}
     for n, d in G.nodes(data=True):
+        if d.get('is_azure', False):
+            continue
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
         if d['type'].lower() != 'user':
@@ -654,7 +748,7 @@ def print_sid_history_abuse(G, domain_filter=None):
         console.print("[green]No obvious SID history abuse detected[/green]")
 
 def print_adcs_vulnerabilities(G, domain_filter=None):
-    console.rule("[bold magenta]ADCS ESC Vulnerabilities (ESC1–ESC8)[/bold magenta]")
+    console.rule("[bold magenta]ADCS ESC Vulnerabilities (ESC1–ESC8) (AD)[/bold magenta]")
     found = False
     def get_bool_prop(props, keys, default=False):
         for key in keys:
@@ -663,6 +757,8 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
                 return bool(val)
         return default
     for n, d in G.nodes(data=True):
+        if d.get('is_azure', False):
+            continue
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
         obj_type = d.get('type', 'Unknown').lower()
@@ -744,10 +840,12 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
         console.print("[green]No obvious ESC1–ESC8 misconfigurations detected[/green]")
 
 def print_gpo_abuse(G, domain_filter=None):
-    console.rule("[bold magenta]GPO Abuse Risks[/bold magenta]")
+    console.rule("[bold magenta]GPO Abuse Risks (AD)[/bold magenta]")
     found = False
     high_value_keywords = ['domain controllers', 'domain admins', 'enterprise admins', 'administrators', 'dc']
     for n, d in G.nodes(data=True):
+        if d.get('is_azure', False):
+            continue
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
         if d['type'].lower() != 'gpo':
@@ -782,9 +880,9 @@ def print_gpo_abuse(G, domain_filter=None):
         console.print("[green]No dangerous GPO rights found[/green]")
 
 def print_dcsync_rights(G, domain_filter=None):
-    console.rule("[bold magenta]DCSync / Replication Rights[/bold magenta]")
+    console.rule("[bold magenta]DCSync / Replication Rights (AD)[/bold magenta]")
     found = False
-    domain_oids = [n for n, d in G.nodes(data=True) if d['type'] == 'Domain' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]
+    domain_oids = [n for n, d in G.nodes(data=True) if d['type'] == 'Domain' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter) and not d.get('is_azure', False)]
     if not domain_oids:
         console.print("[yellow]No domain objects found[/yellow]")
         return
@@ -805,9 +903,11 @@ def print_dcsync_rights(G, domain_filter=None):
         console.print("[green]No DCSync rights detected[/green]")
 
 def print_rbcd(G, domain_filter=None):
-    console.rule("[bold magenta]Resource-Based Constrained Delegation (RBCD)[/bold magenta]")
+    console.rule("[bold magenta]Resource-Based Constrained Delegation (RBCD) (AD)[/bold magenta]")
     found = False
     for n, d in G.nodes(data=True):
+        if d.get('is_azure', False):
+            continue
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
         if d['type'] != 'Computer':
@@ -829,7 +929,7 @@ def print_rbcd(G, domain_filter=None):
 
 def print_shortest_paths(G, fast=False, max_paths=10, target_filter=None, domain_filter=None, indirect=False):
     console.rule("[bold magenta]Shortest Paths to High-Value Targets[/bold magenta]")
-    users = [n for n, d in G.nodes(data=True) if d['type'].lower() == 'user' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]
+    users = [n for n, d in G.nodes(data=True) if d['type'].lower() in ['user', 'azure user'] and (not domain_filter or d.get('props', {}).get('domain') == domain_filter or d.get('props', {}).get('tenantId') == domain_filter)]
     targets = get_high_value_targets(G, domain_filter)
     if target_filter:
         targets = [t for t in targets if target_filter.lower() in t[1].lower()]
@@ -882,6 +982,7 @@ def print_shortest_paths(G, fast=False, max_paths=10, target_filter=None, domain
 def print_dangerous_permissions(G, domain_filter=None, indirect=False):
     console.rule("[bold magenta]Dangerous Permissions on High-Value Objects[/bold magenta]")
     dangerous_rights = {'genericall', 'owns', 'writedacl', 'writeowner', 'allextendedrights', 'genericwrite', 'addmember', 'resetpassword', 'forcechangepassword', 'manageca', 'managecertificates', 'enroll', 'certificateenroll', 'writeproperty'}
+    azure_dangerous = {'genericall', 'owns', 'writedacl', 'writeowner', 'addsecret', 'addcertificate', 'addowner', 'execute', 'canread', 'canwrite', 'candelete'}
     targets = get_high_value_targets(G, domain_filter)
     found = False
     if not targets:
@@ -889,7 +990,9 @@ def print_dangerous_permissions(G, domain_filter=None, indirect=False):
         return
     for tid, tname, ttype in targets:
         incoming = G.in_edges(tid, data=True)
-        dangerous_edges = [(u, d['label']) for u, v, d in incoming if 'label' in d and d['label'].lower() in dangerous_rights and u in G.nodes]
+        is_azure = G.nodes[tid].get('is_azure', False)
+        rights_set = azure_dangerous if is_azure else dangerous_rights
+        dangerous_edges = [(u, d['label']) for u, v, d in incoming if 'label' in d and d['label'].lower() in rights_set and u in G.nodes]
         if dangerous_edges:
             found = True
             console.print(f"\n[bold cyan]{tname} ({ttype}):[/bold cyan]")
@@ -908,9 +1011,9 @@ def print_dangerous_permissions(G, domain_filter=None, indirect=False):
         console.print(f"\n[dim]Checking indirect dangerous permissions via groups...[/dim]")
         for tid, tname, ttype in targets:
             for u, v, d in G.edges(data=True):
-                if v == tid and 'label' in d and d['label'].lower() in dangerous_rights:
+                if v == tid and 'label' in d and d['label'].lower() in (azure_dangerous if G.nodes[tid].get('is_azure', False) else dangerous_rights):
                     group_name = G.nodes[u]['name']
-                    if G.nodes[u]['type'].lower() == 'group':
+                    if G.nodes[u]['type'].lower() in ['group', 'azure group']:
                         members = [m for m in G.predecessors(u) if any(edge_data.get('label') == 'MemberOf' for edge_data in (G.get_edge_data(m, u) or {}).values())]
                         if members:
                             console.print(f"  [yellow]Indirect via group {group_name}[/yellow]: {', '.join([G.nodes[m]['name'] for m in members[:3]])}")
@@ -920,11 +1023,13 @@ def print_dangerous_permissions(G, domain_filter=None, indirect=False):
         console.print("[green]No dangerous ACLs found on high-value objects[/green]")
 
 def print_kerberoastable(G, domain_filter=None):
-    console.rule("[bold magenta]Kerberoastable Accounts[/bold magenta]")
+    console.rule("[bold magenta]Kerberoastable Accounts (AD)[/bold magenta]")
     found = False
     count = 0
     max_display = 20
     for n, d in G.nodes(data=True):
+        if d.get('is_azure', False):
+            continue
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
         if d['type'].lower() != 'user':
@@ -949,11 +1054,13 @@ def print_kerberoastable(G, domain_filter=None):
         console.print("[green]None found[/green]")
 
 def print_as_rep_roastable(G, domain_filter=None):
-    console.rule("[bold magenta]AS-REP Roastable Accounts (DONT_REQ_PREAUTH)[/bold magenta]")
+    console.rule("[bold magenta]AS-REP Roastable Accounts (DONT_REQ_PREAUTH) (AD)[/bold magenta]")
     found = False
     count = 0
     max_display = 20
     for n, d in G.nodes(data=True):
+        if d.get('is_azure', False):
+            continue
         if domain_filter and d.get('props', {}).get('domain') != domain_filter:
             continue
         if d['type'].lower() != 'user':
@@ -978,8 +1085,8 @@ def print_as_rep_roastable(G, domain_filter=None):
         console.print("[green]None found[/green]")
 
 def print_sessions_localadmin(G, domain_filter=None):
-    console.rule("[bold magenta]Session / LocalAdmin / RDP / DCOM Summary[/bold magenta]")
-    computers = [n for n, d in G.nodes(data=True) if d['type'].lower() == 'computer' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]
+    console.rule("[bold magenta]Session / LocalAdmin / RDP / DCOM Summary (AD)[/bold magenta]")
+    computers = [n for n, d in G.nodes(data=True) if d['type'].lower() == 'computer' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter) and not d.get('is_azure', False)]
     if not computers:
         console.print("[yellow]No computers found[/yellow]")
         return
@@ -1010,7 +1117,7 @@ def print_paths_to_owned(G, owned_str, domain_filter=None):
     for o in owned_list:
         found = False
         for oid, d in G.nodes(data=True):
-            if d['name'].upper().split('@')[0] == o.upper() and (not domain_filter or d.get('props', {}).get('domain') == domain_filter):
+            if d['name'].upper().split('@')[0] == o.upper() and (not domain_filter or d.get('props', {}).get('domain') == domain_filter or d.get('props', {}).get('tenantId') == domain_filter):
                 owned_oids.append((oid, d['name'], d['type']))
                 found = True
                 break
@@ -1022,7 +1129,7 @@ def print_paths_to_owned(G, owned_str, domain_filter=None):
         console.print(f"\n[bold red]Owned target:[/bold red] [bold cyan]{tname}[/bold cyan] ({ttype})")
         count = 0
         for source_oid, sd in G.nodes(data=True):
-            if sd['type'].lower() != 'user':
+            if sd['type'].lower() not in ['user', 'azure user']:
                 continue
             if not nx.has_path(G, source_oid, tid):
                 continue
@@ -1046,7 +1153,7 @@ def print_arbitrary_paths(G, path_from=None, path_to=None, domain_filter=None, m
     for sname in sources:
         s_oid = None
         for oid, d in G.nodes(data=True):
-            if d['name'].upper().split('@')[0] == sname.upper() and (not domain_filter or d.get('props', {}).get('domain') == domain_filter):
+            if d['name'].upper().split('@')[0] == sname.upper() and (not domain_filter or d.get('props', {}).get('domain') == domain_filter or d.get('props', {}).get('tenantId') == domain_filter):
                 s_oid = oid
                 break
         if not s_oid:
@@ -1055,7 +1162,7 @@ def print_arbitrary_paths(G, path_from=None, path_to=None, domain_filter=None, m
         for tname in targets:
             t_oid = None
             for oid, d in G.nodes(data=True):
-                if d['name'].upper().split('@')[0] == tname.upper() and (not domain_filter or d.get('props', {}).get('domain') == domain_filter):
+                if d['name'].upper().split('@')[0] == tname.upper() and (not domain_filter or d.get('props', {}).get('domain') == domain_filter or d.get('props', {}).get('tenantId') == domain_filter):
                     t_oid = oid
                     break
             if not t_oid:
@@ -1070,12 +1177,15 @@ def print_arbitrary_paths(G, path_from=None, path_to=None, domain_filter=None, m
                 console.print(f"[dim]No path from {sname} to {tname}[/dim]")
 
 def print_trust_abuse(G, domain_filter=None):
-    console.rule("[bold magenta]Domain Trust / Cross-Domain Abuse[/bold magenta]")
+    console.rule("[bold magenta]Domain Trust / Cross-Domain Abuse (AD) or Tenant Abuse (Azure)[/bold magenta]")
     found = False
     trust_labels = {'trustedby', 'trusts', 'foreignadmin', 'foreigngroup', 'memberof (cross-domain)'}
+    azure_labels = {'tenantmember', 'cross-tenant'}
     for u, v, d in G.edges(data=True):
         label_lower = d.get('label', '').lower()
-        if any(t in label_lower for t in trust_labels) or 'foreign' in label_lower:
+        is_azure = G.nodes[u].get('is_azure', False) or G.nodes[v].get('is_azure', False)
+        labels = azure_labels if is_azure else trust_labels
+        if any(t in label_lower for t in labels) or 'foreign' in label_lower:
             u_name = G.nodes[u]['name']
             v_name = G.nodes[v]['name']
             if domain_filter and domain_filter.lower() not in (u_name.lower() + v_name.lower()):
@@ -1084,18 +1194,19 @@ def print_trust_abuse(G, domain_filter=None):
             console.print(f"[yellow]Trust abuse possible[/yellow]: [green]{u_name}[/green] --[{d['label']}]--> [cyan]{v_name}[/cyan]")
             add_finding("Trust Abuse", f"{u_name} {d['label']} {v_name}", score=7)
     if not found:
-        console.print("[green]No obvious cross-domain trust abuse detected[/green]")
+        console.print("[green]No obvious cross-domain or cross-tenant abuse detected[/green]")
 
 def inspect_node(G, identifier, domain_filter=None):
     console.rule(f"[bold magenta]Detailed Inspection: {identifier}[/bold magenta]")
     found = False
     for oid, d in G.nodes(data=True):
         name_norm = d['name'].upper().split('@')[0]
-        if (oid == identifier or name_norm == identifier.upper()) and (not domain_filter or d.get('props', {}).get('domain') == domain_filter):
+        if (oid == identifier or name_norm == identifier.upper()) and (not domain_filter or d.get('props', {}).get('domain') == domain_filter or d.get('props', {}).get('tenantId') == domain_filter):
             found = True
             console.print(f"[cyan]OID:[/cyan] {oid}")
             console.print(f"[cyan]Name:[/cyan] {d['name']}")
             console.print(f"[cyan]Type:[/cyan] {d['type']}")
+            console.print(f"[cyan]Is Azure:[/cyan] {d.get('is_azure', False)}")
             console.print("[dim]Properties:[/dim]")
             for k, v in sorted(d.get('props', {}).items()):
                 console.print(f"  {k}: {v}")
@@ -1110,12 +1221,12 @@ def inspect_node(G, identifier, domain_filter=None):
         console.print(f"[yellow]Node '{identifier}' not found (or filtered)[/yellow]")
 
 def print_group_analysis(G, domain_filter=None, deep_analysis=False):
-    console.rule("[bold magenta]Group Nesting Depth & Cycle Analysis[/bold magenta]")
-    groups = [n for n, d in G.nodes(data=True) if d['type'].lower() == 'group' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]
+    console.rule("[bold magenta]Group Nesting Depth & Cycle Analysis (AD + Azure)[/bold magenta]")
+    groups = [n for n, d in G.nodes(data=True) if d['type'].lower() in ['group', 'azure group'] and (not domain_filter or d.get('props', {}).get('domain') == domain_filter or d.get('props', {}).get('tenantId') == domain_filter)]
     if not groups:
         console.print("[green]No groups found[/green]")
         return
-    high_priv_keywords = ['admin', 'domain admins', 'enterprise admins', 'schema admins', 'administrators', 'domain users', 'authenticated users']
+    high_priv_keywords = ['admin', 'domain admins', 'enterprise admins', 'schema admins', 'administrators', 'domain users', 'authenticated users', 'global admin', 'user admin']
     important_groups = [g for g in groups if any(k in G.nodes[g]['name'].lower() for k in high_priv_keywords)]
     groups_to_check = important_groups[:50] if important_groups else groups[:100]
     console.print(f"[cyan]Analyzing {len(groups_to_check)} important groups for nesting depth...[/cyan]")
@@ -1151,12 +1262,18 @@ def print_group_analysis(G, domain_filter=None, deep_analysis=False):
         console.print("[dim]Cycle detection skipped for performance (use --deep-analysis to enable)[/dim]")
 
 def print_stats_dashboard(G, domain_filter=None):
-    console.rule("[bold magenta]AD Statistics Dashboard[/bold magenta]")
-    filtered_nodes = [(n, d) for n, d in G.nodes(data=True) if not domain_filter or d.get('props', {}).get('domain') == domain_filter]
+    console.rule("[bold magenta]AD & Azure Statistics Dashboard[/bold magenta]")
+    filtered_nodes = [(n, d) for n, d in G.nodes(data=True) if not domain_filter or d.get('props', {}).get('domain') == domain_filter or d.get('props', {}).get('tenantId') == domain_filter]
     total = len(filtered_nodes)
     by_type = defaultdict(int)
+    azure_count = 0
+    ad_count = 0
     for _, d in filtered_nodes:
         by_type[d['type']] += 1
+        if d.get('is_azure', False):
+            azure_count += 1
+        else:
+            ad_count += 1
     table = Table(title="Object Counts")
     table.add_column("Type", style="cyan")
     table.add_column("Count", justify="right")
@@ -1168,7 +1285,122 @@ def print_stats_dashboard(G, domain_filter=None):
     console.print(f"[cyan]Computers with at least one LocalAdmin right: {local_admins}/{computers} ({local_admins/computers*100 if computers else 0:.1f}%)[/cyan]")
     hv = len(get_high_value_targets(G, domain_filter))
     console.print(f"[cyan]High-value targets: {hv}[/cyan]")
-    console.print(f"[cyan]Total nodes: {total} | Total edges: {G.number_of_edges()}[/cyan]")
+    console.print(f"[cyan]Total nodes: {total} | AD: {ad_count} | Azure: {azure_count} | Edges: {G.number_of_edges()}[/cyan]")
+
+# New Azure-specific functions
+def print_azure_privileged_roles(G, domain_filter=None):
+    console.rule("[bold magenta]Azure Privileged Roles Detection[/bold magenta]")
+    found = False
+    privileged_roles = ['global admin', 'user admin', 'application admin', 'exchange admin', 'sharepoint admin', 'intune admin', 'security admin', 'conditional access admin', 'privileged role admin']
+    for n, d in G.nodes(data=True):
+        if not d.get('is_azure', False):
+            continue
+        if domain_filter and d.get('props', {}).get('tenantId') != domain_filter:
+            continue
+        if d['type'].lower() == 'azure role':
+            role_name = d['name'].lower()
+            if any(pr in role_name for pr in privileged_roles):
+                found = True
+                console.print(f"[red]Privileged Azure role[/red]: [bold cyan]{d['name']}[/bold cyan]")
+                incoming = list(G.in_edges(n, data=True))
+                for u, _, edata in incoming:
+                    if edata.get('label') == 'HasRole':
+                        console.print(f"  → [green]{G.nodes[u]['name']}[/green] has this role")
+                add_finding("Azure Privileged Roles", f"Privileged role: {d['name']}")
+    if found:
+        print_abuse_panel("Azure Privileged Roles")
+    else:
+        console.print("[green]No privileged Azure roles detected[/green]")
+def print_azure_app_secrets(G, domain_filter=None):
+    console.rule("[bold magenta]Azure Application Secrets/Certificates Exposure[/bold magenta]")
+    found = False
+    for n, d in G.nodes(data=True):
+        if not d.get('is_azure', False):
+            continue
+        if domain_filter and d.get('props', {}).get('tenantId') != domain_filter:
+            continue
+        if d['type'].lower() == 'azure application':
+            props = d.get('props', {})
+            has_secrets = props.get('keyCredentials', []) or props.get('passwordCredentials', [])
+            if has_secrets:
+                found = True
+                console.print(f"[red]Azure app with secrets/certificates[/red]: [bold cyan]{d['name']}[/bold cyan]")
+                incoming = list(G.in_edges(n, data=True))
+                for u, _, edata in incoming:
+                    if edata.get('label') in ['Owns', 'AddSecret', 'AddCertificate']:
+                        console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edata['label']}]-->")
+                add_finding("Azure App Secrets", f"App with secrets: {d['name']}")
+    if found:
+        print_abuse_panel("Azure App Secrets")
+    else:
+        console.print("[green]No Azure apps with exposed secrets/certificates[/green]")
+def print_azure_mfa_bypass(G, domain_filter=None):
+    console.rule("[bold magenta]Azure MFA Bypass Risks[/bold magenta]")
+    found = False
+    for n, d in G.nodes(data=True):
+        if not d.get('is_azure', False):
+            continue
+        if domain_filter and d.get('props', {}).get('tenantId') != domain_filter:
+            continue
+        if d['type'].lower() == 'azure user':
+            props = d.get('props', {})
+            mfa_enabled = props.get('strongAuthenticationRequirements', {}).get('state') == 'Enforced' or props.get('mfaEnrolled', False)
+            if not mfa_enabled:
+                found = True
+                console.print(f"[yellow]Azure user without MFA[/yellow]: [green]{d['name']}[/green]")
+                add_finding("Azure MFA Bypass", f"User without MFA: {d['name']}")
+    if found:
+        print_abuse_panel("Azure MFA Bypass")
+    else:
+        console.print("[green]All Azure users have MFA enabled (or not detectable)[/green]")
+        
+def print_azure_guest_access(G, domain_filter=None):
+    console.rule("[bold magenta]Azure Guest User Access Risks[/bold magenta]")
+    found = False
+    for n, d in G.nodes(data=True):
+        if not d.get('is_azure', False):
+            continue
+        if domain_filter and d.get('props', {}).get('tenantId') != domain_filter:
+            continue
+        if d['type'].lower() == 'azure user':
+            props = d.get('props', {})
+            user_type = props.get('userType', '').lower()
+            if user_type == 'guest':
+                found = True
+                console.print(f"[yellow]Azure guest user[/yellow]: [green]{d['name']}[/green]")
+                outgoing = list(G.out_edges(n, data=True))
+                for _, v, edata in outgoing:
+                    if edata.get('label') == 'HasRole':
+                        role_name = G.nodes[v]['name']
+                        console.print(f"  → Has role: [cyan]{role_name}[/cyan]")
+                add_finding("Azure Guest Access", f"Guest user: {d['name']}")
+    if found:
+        print_abuse_panel("Azure Guest Access")
+    else:
+        console.print("[green]No Azure guest users with elevated access detected[/green]")
+
+def print_azure_service_principal_abuse(G, domain_filter=None):
+    console.rule("[bold magenta]Azure Service Principal Abuse Risks[/bold magenta]")
+    found = False
+    for n, d in G.nodes(data=True):
+        if not d.get('is_azure', False):
+            continue
+        if domain_filter and d.get('props', {}).get('tenantId') != domain_filter:
+            continue
+        if d['type'].lower() == 'azure service principal':
+            incoming = list(G.in_edges(n, data=True))
+            dangerous_rights = {'genericall', 'owns', 'writedacl', 'writeowner', 'addsecret', 'addcertificate', 'addowner', 'execute', 'canread', 'canwrite', 'candelete'}
+            for u, _, edata in incoming:
+                if edata.get('label', '').lower() in dangerous_rights:  # Fixed: added .lower() for case-insensitive comparison
+                    found = True
+                    console.print(f"[red]Azure SP with dangerous rights[/red]: [bold cyan]{d['name']}[/bold cyan]")
+                    console.print(f"  → [green]{G.nodes[u]['name']}[/green] --[{edata['label']}]-->")
+                    add_finding("Azure Service Principal Abuse", f"SP abuse: {d['name']}")
+                    break
+    if found:
+        print_abuse_panel("Azure Service Principal Abuse")
+    else:
+        console.print("[green]No Azure service principals with abuse potential detected[/green]")
 
 # ────────────────────────────────────────────────
 # Export
@@ -1186,7 +1418,7 @@ def export_results(G, output_prefix="bloodbash", format_type="md", domain_filter
         console.print(f"[green]Exported Markdown:[/green] {path}")
     elif format_type == "json":
         path = f"{output_prefix}.json"
-        summary = {"nodes": G.number_of_nodes(), "edges": G.number_of_edges(), "high_value": [{"name": d['name'], "type": d['type']} for _, d in G.nodes(data=True) if any(k in d['name'].lower() for k in ['admin', 'krbtgt', 'ca', 'template']) and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]}
+        summary = {"nodes": G.number_of_nodes(), "edges": G.number_of_edges(), "high_value": [{"name": d['name'], "type": d['type']} for _, d in G.nodes(data=True) if any(k in d['name'].lower() for k in ['admin', 'krbtgt', 'ca', 'template']) and (not domain_filter or d.get('props', {}).get('domain') == domain_filter or d.get('props', {}).get('tenantId') == domain_filter)]}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
         console.print(f"[green]Exported JSON:[/green] {path}")
@@ -1207,7 +1439,7 @@ def export_results(G, output_prefix="bloodbash", format_type="md", domain_filter
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["Principal", "Count", "Examples"])
-            computers = [n for n, d in G.nodes(data=True) if d['type'].lower() == 'computer' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)]
+            computers = [n for n, d in G.nodes(data=True) if d['type'].lower() == 'computer' and (not domain_filter or d.get('props', {}).get('domain') == domain_filter) and not d.get('is_azure', False)]
             admin_edges = [(u, v, d) for u, v, d in G.edges(data=True) if d.get('label') == 'LocalAdmin' and v in computers]
             from collections import Counter
             counts = Counter(u for u, _, _ in admin_edges)
@@ -1217,7 +1449,7 @@ def export_results(G, output_prefix="bloodbash", format_type="md", domain_filter
         console.print(f"[green]Exported CSV:[/green] {path}")
     elif format_type == "yaml":
         path = f"{output_prefix}.yaml"
-        summary = {"nodes": G.number_of_nodes(), "edges": G.number_of_edges(), "high_value": [{"name": d['name'], "type": d['type']} for _, d in G.nodes(data=True) if any(k in d['name'].lower() for k in ['admin', 'krbtgt', 'ca', 'template']) and (not domain_filter or d.get('props', {}).get('domain') == domain_filter)], "findings": [{"score": s, "category": c, "details": d} for s, c, d in global_findings]}
+        summary = {"nodes": G.number_of_nodes(), "edges": G.number_of_edges(), "high_value": [{"name": d['name'], "type": d['type']} for _, d in G.nodes(data=True) if any(k in d['name'].lower() for k in ['admin', 'krbtgt', 'ca', 'template']) and (not domain_filter or d.get('props', {}).get('domain') == domain_filter or d.get('props', {}).get('tenantId') == domain_filter)], "findings": [{"score": s, "category": c, "details": d} for s, c, d in global_findings]}
         with open(path, "w", encoding="utf-8") as f:
             yaml.dump(summary, f, default_flow_style=False)
         console.print(f"[green]Exported YAML:[/green] {path}")
@@ -1226,7 +1458,7 @@ def export_bloodhound_compatible(G, output_prefix="bloodbash_bh"):
     path = f"{output_prefix}.json"
     nodes_list = []
     for oid, data in G.nodes(data=True):
-        nodes_list.append({"objectid": oid, "name": data.get('name'), "type": data.get('type'), "properties": data.get('props', {})})
+        nodes_list.append({"objectid": oid, "name": data.get('name'), "type": data.get('type'), "properties": data.get('props', {}), "is_azure": data.get('is_azure', False)})
     rels_list = []
     for u, v, data in G.edges(data=True):
         rels_list.append({"start": u, "end": v, "type": data.get('label')})
@@ -1239,12 +1471,12 @@ def export_to_dot(G, dot_path, domain_filter=None):
     with open(dot_path, "w", encoding="utf-8") as f:
         f.write("digraph BloodBash {\n  rankdir=LR;\n  node [shape=box];\n")
         for n, d in G.nodes(data=True):
-            if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            if domain_filter and d.get('props', {}).get('domain') != domain_filter and d.get('props', {}).get('tenantId') != domain_filter:
                 continue
-            color = "red" if any(k in d['name'].lower() for k in ['admin', 'krbtgt', 'ca', 'template']) else "blue"
+            color = "red" if any(k in d['name'].lower() for k in ['admin', 'krbtgt', 'ca', 'template', 'global admin']) else "blue"
             f.write(f'  "{d["name"]}" [label="{d["name"]}\\n{d["type"]}", color={color}];\n')
         for u, v, d in G.edges(data=True):
-            if domain_filter and (G.nodes[u].get('props', {}).get('domain') != domain_filter or G.nodes[v].get('props', {}).get('domain') != domain_filter):
+            if domain_filter and (G.nodes[u].get('props', {}).get('domain') != domain_filter and G.nodes[u].get('props', {}).get('tenantId') != domain_filter) and (G.nodes[v].get('props', {}).get('domain') != domain_filter and G.nodes[v].get('props', {}).get('tenantId') != domain_filter):
                 continue
             f.write(f'  "{G.nodes[u]["name"]}" -> "{G.nodes[v]["name"]}" [label="{d.get("label", "?")}"];\n')
         f.write("}\n")
@@ -1252,11 +1484,11 @@ def export_to_dot(G, dot_path, domain_filter=None):
     console.print(f"[dim]Render with: dot -Tpng {dot_path} -o graph.png[/dim]")
 
 # ────────────────────────────────────────────────
-# Main with --debug
+# Main with 
 # ────────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(description="BloodBash - Advanced BloodHound Analyzer with Abuse Suggestions")
-    parser.add_argument('directory', nargs='?', default='.', help='Path to SharpHound JSON files')
+    parser = argparse.ArgumentParser(description="BloodBash - Advanced BloodHound & AzureHound Offline Analyzer")
+    parser.add_argument('directory', nargs='?', default='.', help='Path to SharpHound & AzureHound JSON files')
     parser.add_argument('--shortest-paths', action='store_true')
     parser.add_argument('--dangerous-permissions', action='store_true')
     parser.add_argument('--adcs', action='store_true')
@@ -1276,13 +1508,18 @@ def main():
     parser.add_argument("--gpo-content-dir", type=str, default=None, help="Directory containing GPO XML reports for full content analysis")
     parser.add_argument('--constrained-delegation', action='store_true')
     parser.add_argument('--laps', action='store_true')
+    parser.add_argument('--azure-privileged-roles', action='store_true')
+    parser.add_argument('--azure-app-secrets', action='store_true')
+    parser.add_argument('--azure-mfa-bypass', action='store_true')
+    parser.add_argument('--azure-guest-access', action='store_true')
+    parser.add_argument('--azure-sp-abuse', action='store_true')
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--all', action='store_true')
     parser.add_argument('--export', nargs='?', const='md', choices=['md', 'json', 'html', 'csv', 'yaml'], help='Export results')
     parser.add_argument('--export-bh', action='store_true', help='Export full graph in BloodHound-compatible JSON format')
     parser.add_argument('--dot', nargs='?', const='bloodbash.dot', help='Export key subgraphs to Graphviz DOT file')
     parser.add_argument('--fast', action='store_true', help='Fast mode (skip heavy pathfinding)')
-    parser.add_argument('--domain', help='Filter by domain')
+    parser.add_argument('--domain', help='Filter by domain (AD) or tenantId (Azure)')
     parser.add_argument('--indirect', action='store_true', help='Include indirect paths/permissions')
     parser.add_argument('--db', help='SQLite DB path for persistence (save/load graph)')
     parser.add_argument('--owned', help='Comma-separated owned principals (find paths to them)')
@@ -1292,11 +1529,9 @@ def main():
     parser.add_argument('--deep-analysis', action='store_true', help='Enable full (slow) group cycle detection')
     parser.add_argument('--debug', action='store_true', help='Enable verbose debug output for troubleshooting')
     args = parser.parse_args()
-
     DEBUG = args.debug
     if DEBUG:
         console.print("[bold blue]=== DEBUG MODE ENABLED ===[/bold blue]")
-
     start_time = time.time()
     if args.db and os.path.exists(args.db):
         G, name_to_oid = load_graph_from_db(args.db)
@@ -1306,19 +1541,16 @@ def main():
             console.print("[red]No objects loaded. Exiting.[/red]")
             sys.exit(1)
         G, name_to_oid = build_graph(nodes, args.db if args.db else None, debug=DEBUG)
-
     if args.all:
-        mode_str = "Full analysis (--all)"
-    elif any([args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse, args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions, args.password_never_expires, args.password_not_required, args.shadow_credentials, args.gpo_parsing, args.constrained_delegation, args.laps, args.owned, args.path_from, args.path_to, args.inspect, args.export_bh, args.dot]):
-        mode_str = "Selected checks (including new owned/arbitrary/inspect/export features)"
+        mode_str = "Full analysis (AD + Azure) (--all)"
+    elif any([args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse, args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions, args.password_never_expires, args.password_not_required, args.shadow_credentials, args.gpo_parsing, args.constrained_delegation, args.laps, args.azure_privileged_roles, args.azure_app_secrets, args.azure_mfa_bypass, args.azure_guest_access, args.azure_sp_abuse, args.owned, args.path_from, args.path_to, args.inspect, args.export_bh, args.dot]):
+        mode_str = "Selected checks (including AD and Azure features)"
     else:
         mode_str = "Default (verbose summary + common checks)"
     if DEBUG:
         mode_str += " [DEBUG]"
     print_intro_banner(mode_str)
-
-    run_all = args.all or not any([args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse, args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions, args.password_never_expires, args.password_not_required, args.shadow_credentials, args.gpo_parsing, args.constrained_delegation, args.laps, args.owned, args.path_from, args.path_to, args.inspect, args.export_bh, args.dot])
-
+    run_all = args.all or not any([args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse, args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions, args.password_never_expires, args.password_not_required, args.shadow_credentials, args.gpo_parsing, args.constrained_delegation, args.laps, args.azure_privileged_roles, args.azure_app_secrets, args.azure_mfa_bypass, args.azure_guest_access, args.azure_sp_abuse, args.owned, args.path_from, args.path_to, args.inspect, args.export_bh, args.dot])
     if args.verbose or run_all:
         print_verbose_summary(G, args.domain)
     if args.shortest_paths or run_all:
@@ -1357,6 +1589,16 @@ def main():
         print_constrained_delegation(G, args.domain)
     if args.laps or run_all:
         print_laps_status(G, args.domain)
+    if args.azure_privileged_roles or run_all:
+        print_azure_privileged_roles(G, args.domain)
+    if args.azure_app_secrets or run_all:
+        print_azure_app_secrets(G, args.domain)
+    if args.azure_mfa_bypass or run_all:
+        print_azure_mfa_bypass(G, args.domain)
+    if args.azure_guest_access or run_all:
+        print_azure_guest_access(G, args.domain)
+    if args.azure_sp_abuse or run_all:
+        print_azure_service_principal_abuse(G, args.domain)
     if args.owned or run_all:
         print_paths_to_owned(G, args.owned, args.domain)
     if (args.path_from or args.path_to) or run_all:

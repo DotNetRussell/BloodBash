@@ -1,0 +1,108 @@
+{
+    "meta": {
+      "type": "azure",
+      "version": "1.0",
+      "generator": "AzureHound"
+    },
+    "data": [
+      {
+        "kind": "User",
+        "name": "globaladmin@tenant.onmicrosoft.com",
+        "displayName": "Global Admin User",
+        "objectId": "azure-user-1",
+        "userType": "Member",
+        "mfaEnrolled": false,
+        "Relationships": [
+          {
+            "RelationshipType": "HasRole",
+            "TargetObjectId": "azure-role-globaladmin"
+          }
+        ]
+      },
+      {
+        "kind": "Role",
+        "name": "Global Administrator",
+        "displayName": "Global Administrator",
+        "objectId": "azure-role-globaladmin"
+      },
+      {
+        "kind": "User",
+        "name": "guestuser@external.com",
+        "displayName": "Guest User",
+        "objectId": "azure-user-guest",
+        "userType": "Guest",
+        "mfaEnrolled": false,
+        "Relationships": [
+          {
+            "RelationshipType": "HasRole",
+            "TargetObjectId": "azure-role-useradmin"
+          }
+        ]
+      },
+      {
+        "kind": "Role",
+        "name": "User Administrator",
+        "displayName": "User Administrator",
+        "objectId": "azure-role-useradmin"
+      },
+      {
+        "kind": "Application",
+        "name": "VulnerableApp",
+        "displayName": "Vulnerable Application",
+        "objectId": "azure-app-1",
+        "keyCredentials": [
+          {
+            "keyId": "key1",
+            "type": "AsymmetricX509Cert"
+          }
+        ],
+        "passwordCredentials": [
+          {
+            "keyId": "pass1",
+            "type": "Password"
+          }
+        ]
+      },
+      {
+        "kind": "ServicePrincipal",
+        "name": "AbusableSP",
+        "displayName": "Abusable Service Principal",
+        "objectId": "azure-sp-1"
+      },
+      {
+        "kind": "User",
+        "name": "regularuser@tenant.onmicrosoft.com",
+        "displayName": "Regular User",
+        "objectId": "azure-user-regular",
+        "userType": "Member",
+        "mfaEnrolled": true
+      },
+      {
+        "kind": "Group",
+        "name": "AzureGroup",
+        "displayName": "Azure Group",
+        "objectId": "azure-group-1",
+        "Relationships": [
+          {
+            "RelationshipType": "MemberOf",
+            "TargetObjectId": "azure-user-regular"
+          }
+        ]
+      },
+      {
+        "start": "azure-user-1",
+        "end": "azure-sp-1",
+        "label": "GenericAll"
+      },
+      {
+        "start": "azure-user-guest",
+        "end": "azure-app-1",
+        "label": "Owns"
+      },
+      {
+        "start": "azure-user-regular",
+        "end": "azure-group-1",
+        "label": "MemberOf"
+      }
+    ]
+  }
