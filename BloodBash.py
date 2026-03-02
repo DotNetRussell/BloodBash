@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 import json
 import os
 import sys
@@ -18,7 +19,10 @@ import yaml
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import traceback
+import zipfile
+
 __version__ = "1.3.1"  
+
 console = Console()
 # ────────────────────────────────────────────────
 # Severity Scoring
@@ -72,9 +76,9 @@ def print_intro_banner(mode_str):
 [red] :: ::::   :: ::::  ::::: ::  ::::: ::   :::: ::      :: ::::  ::   :::  :::: ::   ::   :::[/red]    
 [red]:: : ::   : :: : :   : :  :    : :  :   :: :  :      :: : ::    :   : :  :: : :     :   : :[/red]    
                                                                                              
-Parses SharpHound & AzureHound JSON files → finds AD/Azure attack paths & misconfigurations
+Parses SharpHound, AzureHound, and BloodHound-Python JSON files → finds AD/Azure attack paths & misconfigurations
 Mode: [cyan]{mode_str}[/cyan]
-Supports both Active Directory (SharpHound) and Azure AD (AzureHound) data.
+Supports both Active Directory (SharpHound/BloodHound-Python) and Azure AD (AzureHound) data.
 For authorized security testing / red teaming only.
 Use --help for all options.
 """,
@@ -188,6 +192,17 @@ Tools: Azure CLI, Azure Graph API.
 def load_json_dir(directory, debug=False):
     nodes = {}
     try:
+        path_obj = Path(directory)
+        if path_obj.suffix.lower() == '.zip':
+            if debug:
+                print(f"Extracting {path_obj.name}...")
+            
+            extract_to = path_obj.parent / path_obj.stem
+            
+            with zipfile.ZipFile(path_obj, 'r') as zip_ref:
+                zip_ref.extractall(extract_to)
+                
+            directory = str(extract_to)
         files = [f for f in os.listdir(directory) if f.lower().endswith('.json')]
     except FileNotFoundError:
         console.print(f"[yellow]Warning: Directory '{directory}' not found. Skipping.[/yellow]")
@@ -1484,11 +1499,11 @@ def export_to_dot(G, dot_path, domain_filter=None):
     console.print(f"[dim]Render with: dot -Tpng {dot_path} -o graph.png[/dim]")
 
 # ────────────────────────────────────────────────
-# Main with 
+# Main execution
 # ────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="BloodBash - Advanced BloodHound & AzureHound Offline Analyzer")
-    parser.add_argument('directory', nargs='?', default='.', help='Path to SharpHound & AzureHound JSON files')
+    parser.add_argument('directory', nargs='?', default='.', help='Path to SharpHound & AzureHound JSON files or zip archive.')
     parser.add_argument('--shortest-paths', action='store_true')
     parser.add_argument('--dangerous-permissions', action='store_true')
     parser.add_argument('--adcs', action='store_true')

@@ -11,7 +11,7 @@ import networkx as nx
 from rich.console import Console
 # Load the BloodBash script by executing it in a controlled namespace
 bloodbash_globals = {}
-with open("BloodBash", "r") as f:
+with open("BloodBash.py", "r") as f:
     exec(f.read(), bloodbash_globals)
 class TestBloodBash(unittest.TestCase):
     def setUp(self):
