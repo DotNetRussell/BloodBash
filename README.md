@@ -36,6 +36,13 @@ Perfect for red teamers, OSCP/CRTP/PNPT prep, quick post-collection triage, or w
 ## Installation
 
 ```bash
+# Install directly from GitHub (recommended)
+pipx install git+https://github.com/DotNetRussell/BloodBash
+```
+
+Or manually:
+
+```bash
 git clone https://github.com/dotnetrussell/bloodbash.git
 cd bloodbash
 
