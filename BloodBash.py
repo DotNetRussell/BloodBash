@@ -457,6 +457,41 @@ def print_verbose_summary(G, domain_filter=None):
 # ────────────────────────────────────────────────
 # Helpers (Extended for Azure)
 # ────────────────────────────────────────────────
+UAC_FLAGS = {
+    0x00000001: "SCRIPT",
+    0x00000002: "ACCOUNTDISABLE",
+    0x00000008: "HOMEDIR_REQUIRED",
+    0x00000010: "LOCKOUT",
+    0x00000020: "PASSWD_NOTREQD",
+    0x00000040: "PASSWD_CANT_CHANGE",
+    0x00000080: "ENCRYPTED_TEXT_PWD_ALLOWED",
+    0x00000100: "TEMP_DUPLICATE_ACCOUNT",
+    0x00000200: "NORMAL_ACCOUNT",
+    0x00000800: "INTERDOMAIN_TRUST_ACCOUNT",
+    0x00001000: "WORKSTATION_TRUST_ACCOUNT",
+    0x00002000: "SERVER_TRUST_ACCOUNT",
+    0x00010000: "DONT_EXPIRE_PASSWORD",
+    0x00020000: "MNS_LOGON_ACCOUNT",
+    0x00040000: "SMARTCARD_REQUIRED",
+    0x00080000: "TRUSTED_FOR_DELEGATION",
+    0x00100000: "NOT_DELEGATED",
+    0x00200000: "USE_DES_KEY_ONLY",
+    0x00400000: "DONT_REQ_PREAUTH",
+    0x00800000: "PASSWORD_EXPIRED",
+    0x01000000: "TRUSTED_TO_AUTH_FOR_DELEGATION",
+    0x04000000: "PARTIAL_SECRETS_ACCOUNT",
+}
+
+def decode_uac(value):
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    flags = [name for bit, name in UAC_FLAGS.items() if value & bit]
+    if flags:
+        return f"{value} ({', '.join(flags)})"
+    return str(value)
+
 def get_bool_prop_ci(props, keys, default=False):
     if not isinstance(props, dict):
         return default
@@ -549,7 +584,9 @@ def print_password_never_expires(G, domain_filter=None):
             password_never_expires = get_bool_prop_ci(props, ['passwordneverexpires', 'PasswordNeverExpires'])
             if password_never_expires:
                 found = True
-                console.print(f"[yellow]Password Never Expires enabled[/yellow]: [green]{d['name']}[/green]")
+                uac_raw = props.get('useraccountcontrol') or props.get('UserAccountControl')
+                uac_str = f" | UAC: {decode_uac(uac_raw)}" if uac_raw is not None else ""
+                console.print(f"[yellow]Password Never Expires enabled[/yellow]: [green]{d['name']}[/green]{uac_str}")
                 add_finding("Password Never Expires", f"User {d['name']} has 'Password Never Expires' set")
     if found:
         console.print(Panel("[bold yellow]Impact:[/bold yellow] Passwords may never expire, leading to old/weak passwords persisting indefinitely.\n[bold]Mitigation:[/bold] Review and enforce password policies; consider resetting passwords for affected accounts.\n[bold]Tools:[/bold] Use PowerShell (Get-ADUser) or AD tools to audit.", title="Abuse Suggestions: Password Never Expires", border_style="yellow"))
@@ -569,7 +606,9 @@ def print_password_not_required(G, domain_filter=None):
             password_not_required = get_bool_prop_ci(props, ['passwordnotrequired', 'PasswordNotRequired'])
             if password_not_required:
                 found = True
-                console.print(f"[red]Password Not Required enabled[/red]: [green]{d['name']}[/green]")
+                uac_raw = props.get('useraccountcontrol') or props.get('UserAccountControl')
+                uac_str = f" | UAC: {decode_uac(uac_raw)}" if uac_raw is not None else ""
+                console.print(f"[red]Password Not Required enabled[/red]: [green]{d['name']}[/green]{uac_str}")
                 add_finding("Password Not Required", f"User {d['name']} has 'Password Not Required' set")
     if found:
         console.print(Panel("[bold red]Impact:[/bold red] No password required for login, enabling easy account takeover or unauthorized access.\n[bold]Abuse:[/bold] Log in without a password; escalate privileges if account has rights.\n[bold]Mitigation:[/bold] Enforce passwords; disable or monitor such accounts.\n[bold]Tools:[/bold] ADUC, PowerShell, or BloodHound for auditing.", title="Abuse Suggestions: Password Not Required", border_style="red"))
@@ -1055,7 +1094,9 @@ def print_kerberoastable(G, domain_filter=None):
         enabled = props.get('enabled', props.get('Enabled', True))
         if hasspn and not sensitive and enabled:
             found = True
-            console.print(f"  • [cyan]{d['name']}[/cyan]")
+            uac_raw = props.get('useraccountcontrol') or props.get('UserAccountControl')
+            uac_str = f" | UAC: {decode_uac(uac_raw)}" if uac_raw is not None else ""
+            console.print(f"  • [cyan]{d['name']}[/cyan]{uac_str}")
             count += 1
             if count >= max_display:
                 remaining = sum(1 for n_inner, d_inner in G.nodes(data=True) if d_inner.get('type', '').lower() == 'user' and get_bool_prop_ci(d_inner.get('props', {}), ['hasspn', 'hasSPN', 'has_spn']) and not d_inner.get('props', {}).get('sensitive', d_inner.get('props', {}).get('Sensitive', False)) and d_inner.get('props', {}).get('enabled', d_inner.get('props', {}).get('Enabled', True))) - max_display
@@ -1086,7 +1127,9 @@ def print_as_rep_roastable(G, domain_filter=None):
         enabled = props.get('enabled', props.get('Enabled', True))
         if dontreqpreauth and not sensitive and enabled:
             found = True
-            console.print(f"  • [cyan]{d['name']}[/cyan]")
+            uac_raw = props.get('useraccountcontrol') or props.get('UserAccountControl')
+            uac_str = f" | UAC: {decode_uac(uac_raw)}" if uac_raw is not None else ""
+            console.print(f"  • [cyan]{d['name']}[/cyan]{uac_str}")
             count += 1
             if count >= max_display:
                 remaining = sum(1 for n_inner, d_inner in G.nodes(data=True) if d_inner.get('type', '').lower() == 'user' and get_bool_prop_ci(d_inner.get('props', {}), ['dontreqpreauth', 'dontReqPreauth', 'dont_req_preauth']) and not d_inner.get('props', {}).get('sensitive', d_inner.get('props', {}).get('Sensitive', False)) and d_inner.get('props', {}).get('enabled', d_inner.get('props', {}).get('Enabled', True))) - max_display
@@ -1224,7 +1267,10 @@ def inspect_node(G, identifier, domain_filter=None):
             console.print(f"[cyan]Is Azure:[/cyan] {d.get('is_azure', False)}")
             console.print("[dim]Properties:[/dim]")
             for k, v in sorted(d.get('props', {}).items()):
-                console.print(f"  {k}: {v}")
+                if k.lower() == 'useraccountcontrol':
+                    console.print(f"  {k}: {decode_uac(v)}")
+                else:
+                    console.print(f"  {k}: {v}")
             console.print("[dim]Outgoing edges:[/dim]")
             for _, tgt, edata in G.out_edges(oid, data=True):
                 console.print(f"  → [green]{G.nodes[tgt]['name']}[/green] [{edata.get('label')}]")

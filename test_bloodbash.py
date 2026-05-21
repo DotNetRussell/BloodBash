@@ -711,5 +711,76 @@ class TestBloodBash(unittest.TestCase):
         output = self._capture_output(bloodbash_globals['print_adcs_vulnerabilities'], G)
         self.assertIn("ESC1/ESC2", output)
         self.assertGreater(len(bloodbash_globals['global_findings']), 0)  # Ensure findings were added
+    # ────────────────────────────────────────────────
+    # Tests for decode_uac() (UAC attribute translation)
+    # ────────────────────────────────────────────────
+    def test_decode_uac_single_flag(self):
+        # 0x2 = ACCOUNTDISABLE
+        result = bloodbash_globals['decode_uac'](2)
+        self.assertIn("2", result)
+        self.assertIn("ACCOUNTDISABLE", result)
+
+    def test_decode_uac_multiple_flags(self):
+        # 514 = 0x202 = ACCOUNTDISABLE (0x2) + NORMAL_ACCOUNT (0x200)
+        result = bloodbash_globals['decode_uac'](514)
+        self.assertIn("514", result)
+        self.assertIn("ACCOUNTDISABLE", result)
+        self.assertIn("NORMAL_ACCOUNT", result)
+
+    def test_decode_uac_dont_expire_password(self):
+        # 66048 = 0x10200 = NORMAL_ACCOUNT (0x200) + DONT_EXPIRE_PASSWORD (0x10000)
+        result = bloodbash_globals['decode_uac'](66048)
+        self.assertIn("DONT_EXPIRE_PASSWORD", result)
+        self.assertIn("NORMAL_ACCOUNT", result)
+
+    def test_decode_uac_dont_req_preauth(self):
+        # 0x400000 = DONT_REQ_PREAUTH (AS-REP roastable flag)
+        result = bloodbash_globals['decode_uac'](0x400000)
+        self.assertIn("DONT_REQ_PREAUTH", result)
+
+    def test_decode_uac_string_integer_input(self):
+        # decode_uac should accept a numeric string and parse it correctly
+        result = bloodbash_globals['decode_uac']("512")
+        self.assertIn("512", result)
+        self.assertIn("NORMAL_ACCOUNT", result)
+
+    def test_decode_uac_zero_no_flags(self):
+        # 0 matches no bitmask, should return "0" without any flag name
+        result = bloodbash_globals['decode_uac'](0)
+        self.assertEqual(result, "0")
+
+    def test_decode_uac_invalid_input(self):
+        # Non-numeric string should be returned as-is
+        result = bloodbash_globals['decode_uac']("not_a_number")
+        self.assertEqual(result, "not_a_number")
+
+    def test_decode_uac_in_kerberoastable_output(self):
+        # Verify that UAC is displayed alongside kerberoastable users
+        G = nx.MultiDiGraph()
+        # 512 = NORMAL_ACCOUNT, a common UAC value for enabled accounts
+        G.add_node("K", name="KerbUACUser@LAB.LOCAL", type="User", props={
+            "hasspn": True,
+            "sensitive": False,
+            "enabled": True,
+            "useraccountcontrol": 512,
+        })
+        output = self._capture_output(bloodbash_globals['print_kerberoastable'], G)
+        self.assertIn("KerbUACUser@LAB.LOCAL", output)
+        self.assertIn("NORMAL_ACCOUNT", output)
+
+    def test_decode_uac_in_asrep_output(self):
+        # Verify that UAC is displayed alongside AS-REP roastable users
+        G = nx.MultiDiGraph()
+        # 4194816 = NORMAL_ACCOUNT (0x200) + DONT_REQ_PREAUTH (0x400000)
+        G.add_node("A", name="AsRepUACUser@LAB.LOCAL", type="User", props={
+            "dontreqpreauth": True,
+            "sensitive": False,
+            "enabled": True,
+            "useraccountcontrol": 0x400200,
+        })
+        output = self._capture_output(bloodbash_globals['print_as_rep_roastable'], G)
+        self.assertIn("AsRepUACUser@LAB.LOCAL", output)
+        self.assertIn("DONT_REQ_PREAUTH", output)
+
 if __name__ == '__main__':
     unittest.main()
