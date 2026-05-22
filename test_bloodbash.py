@@ -540,5 +540,39 @@ class TestBloodBash(unittest.TestCase):
         output = self._capture_output(bloodbash_globals['print_laps_status'], G)
         self.assertIn("No computers found", output)
 
+    def test_sharehound_findings(self):
+        G = nx.MultiDiGraph()
+        G.add_node("S1", name="FinanceShare", type="NetworkShareSMB")
+        G.add_node("U1", name="LOWPRIV@LAB.LOCAL", type="User")
+        G.add_edge("U1", "S1", label="CanWriteDacl")
+        G.add_node("S2", name="DCBackup.vmdk", type="NetworkShareSMB")
+        output = self._capture_output(bloodbash_globals['print_sharehound_findings'], G)
+        self.assertIn("ShareHound Network Share Analysis", output)
+        self.assertIn("High-risk writable shares", output)
+        self.assertIn("Sensitive files", output)
+
+    def test_no_results_sharehound(self):
+        G = nx.MultiDiGraph()
+        G.add_node("U", name="User", type="User")
+        output = self._capture_output(bloodbash_globals['print_sharehound_findings'], G)
+        self.assertIn("No ShareHound network share data found", output)
+
+    def test_sharehound_authenticated_users(self):
+        G = nx.MultiDiGraph()
+        G.add_node("S", name="PublicShare", type="NetworkShareSMB")
+        G.add_node("A", name="Authenticated Users", type="Group")
+        G.add_edge("A", "S", label="GenericAll")
+        output = self._capture_output(bloodbash_globals['print_sharehound_findings'], G)
+        self.assertIn("Authenticated Users", output)
+
+    def test_sharehound_folder_and_table(self):
+        G = nx.MultiDiGraph()
+        G.add_node("F", name="SecretFolder", type="Folder")
+        G.add_node("U", name="Attacker", type="User")
+        G.add_edge("U", "F", label="CanDsWriteProperty")
+        output = self._capture_output(bloodbash_globals['print_sharehound_findings'], G)
+        self.assertIn("Share Permission Summary", output)
+        self.assertIn("SecretFolder", output)
+
 if __name__ == '__main__':
     unittest.main()

@@ -44,7 +44,7 @@ pyyaml>=6.0
 # Run everything
 python3 BloodBash.py /path/to/sharphound/json --all
 # Specific analyses
-python3 BloodBash.py ./sharpout --adcs --dangerous-permissions --verbose --password-never-expires
+python3 BloodBash.py ./sharpout --adcs --dangerous-permissions --verbose --password-never-expires --sharehound
 # Export results
 python3 BloodBash.py . --all --export=yaml
 # Fast mode (skip pathfinding)

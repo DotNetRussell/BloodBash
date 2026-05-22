@@ -16,7 +16,7 @@ import csv  # For CSV export
 import sqlite3  # For database persistence
 from html import escape  # For HTML export
 import yaml  # For YAML export
-__version__ = "1.1.0"  # Updated version for enhancements
+__version__ = "1.2.0"
 console = Console()
 # ────────────────────────────────────────────────
 # Severity Scoring (for prioritization)
@@ -37,6 +37,8 @@ SEVERITY_SCORES = {
     "GPO Content": 7,             # Medium risk: Exploitable GPO settings
     "Constrained Delegation": 7,  # Medium risk: Service impersonation
     "LAPS": 6,                    # Moderate risk: Password management
+    "Share Write Access": 9,
+    "Share VMDK/DC": 10,
 }
 global_findings = []  # List of (score, category, details) for prioritization
 def add_finding(category, details, score=None):
@@ -79,7 +81,7 @@ def print_intro_banner(mode_str):
 [red]:: : ::   : :: : :   : :  :    : :  :   :: :  :      :: : ::    :   : :  :: : :     :   : :[/red]    
                                                                                              
 
-Parses SharpHound JSON files → finds AD attack paths & misconfigurations
+Parses SharpHound + ShareHound OpenGraph JSON → finds AD & share attack paths & misconfigurations
 What it shows:
 - High-value targets identification
 - ADCS vulnerabilities (ESC1–ESC8)
@@ -97,6 +99,7 @@ What it shows:
 - Users with 'Password Never Expires'
 - Export to Markdown
 - Export to HTML (with XSS protection)
+- ShareHound network share analysis (writable shares, VMDK, FullControl, ransomware targets)
 
 Abuse suggestions: Shown once per vulnerable category (when found)
 Common tools: Certipy, Impacket, Rubeus, Mimikatz, SharpGPOAbuse, etc.
@@ -252,6 +255,13 @@ def load_json_dir(directory):
                     raw = json.load(f)
                     meta_type = raw.get("meta", {}).get("type", "").lower()
                     obj_type = TYPE_FROM_META.get(meta_type, "Unknown")
+                    if not obj_type or obj_type == "Unknown":
+                        if any(k in str(raw).lower() for k in ["networksharesmb", "networkshare", "share", "opengraph", "fileshare"]):
+                            obj_type = "NetworkShareSMB"
+                    if isinstance(raw, list):
+                        for item in raw:
+                            if isinstance(item, dict) and any(k in str(item).lower() for k in ["networkshare", "share"]):
+                                obj_type = "NetworkShareSMB"
                     data = raw.get('data') or raw.get('Results') or raw.get('objects') or raw
                     if not isinstance(data, list):
                         data = [data]
@@ -309,7 +319,7 @@ def build_graph(nodes, db_path=None):
                 label = rel.get('label')
                 if start and end and label:
                     relationship_edges.append((start, end, label))
-            for key in ['MemberOf', 'AdminTo', 'HasSession', 'AllowedToAct', 'HasSIDHistory']:
+            for key in ['MemberOf', 'AdminTo', 'HasSession', 'AllowedToAct', 'HasSIDHistory', 'HasNetworkShare', 'Contains', 'relationships', 'edges']:
                 rels = node.get(key, [])
                 if not isinstance(rels, list):
                     rels = [rels] if rels else []
@@ -1125,6 +1135,69 @@ def print_sessions_localadmin(G, domain_filter=None):
     console.print(table)
     total_admins = sum(counts.values())
     console.print(f"[dim]Total LocalAdmin instances: {total_admins} on {len(computers)} computers[/dim]")
+
+def print_sharehound_findings(G, domain_filter=None):
+    console.rule("[bold magenta]ShareHound Network Share Analysis[/bold magenta]")
+    share_nodes = [n for n, d in G.nodes(data=True) if any(x in d.get('type', '').lower() for x in ['share', 'networkshare', 'fileshare', 'folder'])]
+    if not share_nodes:
+        console.print("[green]No ShareHound network share data found[/green]")
+        return
+    risky_perms = ['Write', 'GenericAll', 'FullControl', 'CanWrite', 'CanWriteDacl', 'CanWriteOwner', 'CanDsWriteProperty', 'WRITE_DAC', 'DS_WRITE_PROPERTY', 'CanDsControlAccess', 'CanDelete', 'CanReadControl', 'CanDsCreateChild', 'CanDsDeleteChild']
+    interesting_exts = ['vmdk', 'vhdx', 'bak', 'sql', 'mdb', 'pst', 'docx', 'xlsx', 'zip', '7z', 'backup', 'iso', 'ova']
+    writable = []
+    sensitive_files = []
+    full_control = []
+    auth_users_access = []
+    for n, d in G.nodes(data=True):
+        if domain_filter and d.get('props', {}).get('domain') != domain_filter:
+            continue
+        name = d.get('name', '')
+        t = d.get('type', '').lower()
+        if any(x in t for x in ['share', 'networkshare', 'fileshare', 'folder']):
+            for u, v, ed in G.in_edges(n, data=True):
+                label = ed.get('label', '')
+                principal_name = G.nodes[u]['name'] if u in G.nodes else str(u)
+                if any(x in label for x in risky_perms):
+                    writable.append((principal_name, name, label))
+                    add_finding("Share Write Access", f"{principal_name} → {name} ({label})")
+                if 'Authenticated Users' in principal_name or 'Everyone' in principal_name:
+                    auth_users_access.append((principal_name, name, label))
+            if any(ext in name.lower() for ext in interesting_exts):
+                sensitive_files.append(name)
+                add_finding("Share Sensitive File", name)
+            props_str = str(d.get('props', {}))
+            if any(x in props_str for x in ['FullControl', 'Full Control', 'GENERIC_ALL']):
+                full_control.append(name)
+            if 'folder' in t:
+                for u, v, ed in G.in_edges(n, data=True):
+                    if any(x in ed.get('label', '') for x in risky_perms):
+                        writable.append((G.nodes[u]['name'] if u in G.nodes else str(u), name, ed.get('label', '')))
+    console.print(f"[cyan]Total shares analyzed: {len(share_nodes)}[/cyan]")
+    if writable:
+        console.print(f"[red]High-risk writable shares: {len(writable)}[/red]")
+        for p, s, l in writable[:15]:
+            console.print(f"  • {p} → {s} ({l})")
+    if auth_users_access:
+        console.print(f"[yellow]Shares accessible by Authenticated Users/Everyone: {len(auth_users_access)}[/yellow]")
+        for p, s, l in auth_users_access[:10]:
+            console.print(f"  • {p} → {s}")
+    if sensitive_files:
+        console.print(f"[red]Sensitive files on shares: {len(sensitive_files)}[/red]")
+        for f in sensitive_files[:10]:
+            console.print(f"  • {f}")
+    if full_control:
+        console.print(f"[red]FullControl shares: {len(full_control)}[/red]")
+    if not writable and not sensitive_files:
+        console.print("[green]No high-risk share exposures detected[/green]")
+    table = Table(title="Share Permission Summary", show_header=True, header_style="bold cyan")
+    table.add_column("Share", style="green")
+    table.add_column("Risky Principals", style="red")
+    for sn in share_nodes[:10]:
+        sname = G.nodes[sn]['name'] if sn in G.nodes else str(sn)
+        rcount = sum(1 for p, s, l in writable if s == sname)
+        table.add_row(sname, str(rcount))
+    console.print(table)
+
 # ────────────────────────────────────────────────
 # Export
 # ────────────────────────────────────────────────
@@ -1232,6 +1305,7 @@ def main():
     )
     parser.add_argument('--constrained-delegation', action='store_true')
     parser.add_argument('--laps', action='store_true')
+    parser.add_argument('--sharehound', action='store_true', help='Run ShareHound OpenGraph network share analysis')
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--all', action='store_true')
     parser.add_argument('--export', nargs='?', const='md', choices=['md', 'json', 'html', 'csv', 'yaml'], help='Export results')
@@ -1253,14 +1327,14 @@ def main():
     if args.all:
         mode_str = "Full analysis (--all)"
     elif any([args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse,
-              args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions, args.password_never_expires, args.password_not_required, args.shadow_credentials, args.gpo_parsing, args.constrained_delegation, args.laps]):
+              args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions, args.password_never_expires, args.password_not_required, args.shadow_credentials, args.gpo_parsing, args.constrained_delegation, args.laps, args.sharehound]):
         mode_str = "Selected checks"
     else:
         mode_str = "Default (verbose summary + common checks)"
     print_intro_banner(mode_str)
     run_all = args.all or not any([
         args.shortest_paths, args.dangerous_permissions, args.adcs, args.gpo_abuse,
-        args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions, args.password_never_expires, args.password_not_required, args.shadow_credentials, args.gpo_parsing, args.constrained_delegation, args.laps
+        args.dcsync, args.rbcd, args.sessions, args.kerberoastable, args.as_rep_roastable, args.sid_history, args.unconstrained_delegation, args.password_descriptions, args.password_never_expires, args.password_not_required, args.shadow_credentials, args.gpo_parsing, args.constrained_delegation, args.laps, args.sharehound
     ])
     if args.verbose or run_all:
         print_verbose_summary(G, args.domain)
@@ -1300,8 +1374,8 @@ def main():
         print_constrained_delegation(G, args.domain)
     if args.laps or run_all:
         print_laps_status(G, args.domain)
-#    if args.all or args.gpo_content_dir:
-#        print_gpo_content_analysis(G, args)
+    if args.sharehound or run_all:
+        print_sharehound_findings(G, args.domain)
     if args.export:
         export_results(G, format_type=args.export, domain_filter=args.domain)
 
