@@ -12,7 +12,7 @@ It parses **real SharpHound collection-per-file JSON** (the format actually prod
 
 Perfect for red teamers, OSCP/CRTP/PNPT prep, quick post-collection triage, or when you only have raw SharpHound **and/or** AzureHound JSON dumps.
 
-![BloodBash verbose output example](https://i.imgur.com/RRUtTD0.png)
+![BloodBash verbose output example](https://i.imgur.com/6pvxpFn.jpeg)
 
 ## What's New in v1.3.1
 - **Updated Metasploit auxiliary module** — full parity with CLI flags (AD + Azure, exports, pathfinding, GPO XML, SQLite cache)
