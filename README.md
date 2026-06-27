@@ -6,7 +6,7 @@
 
 **BloodBash v1.3.1** is a powerful, **standalone** BloodHound / SharpHound **+ AzureHound** JSON analyzer written in Python.
 
-<a href="https://squidhacker.com/2026/02/bloodbash-a-lightweight-python-alternative-to-bloodhound-for-active-directory-analysis/">Article about BloodBash</a>
+<a href="https://squidhacker.com/2026/05/active-directory-hacking-cheat-sheet/">Article about BloodBash</a>
 
 It parses **real SharpHound collection-per-file JSON** (the format actually produced by SharpHound v6+) **and AzureHound JSON exports**, builds a full `networkx` directed graph (nodes + all relationships & ACLs from both AD and Azure/Entra ID), detects attack paths, misconfigurations, and high-impact vulnerabilities — **completely offline**, no Neo4j or BloodHound GUI required.
 
