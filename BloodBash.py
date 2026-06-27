@@ -189,6 +189,26 @@ Tools: Azure CLI, Azure Graph API.
     else:
         console.print(f"[dim]No abuse example defined for {vuln_type}[/dim]")
 
+def _get_prop_ci(item, keys):
+    if not isinstance(item, dict):
+        return None
+    for key in keys:
+        for k, v in item.items():
+            if k.lower() == key.lower() and v is not None and v != '':
+                return v
+    return None
+
+def get_object_id(item):
+    data = item.get('data')
+    if isinstance(data, dict):
+        oid = _get_prop_ci(data, ('id', 'objectid', 'objectId', 'ObjectId', 'ObjectIdentifier'))
+        if oid:
+            return oid
+    oid = _get_prop_ci(item, ('ObjectIdentifier', 'objectid', 'objectId', 'ObjectId', 'id'))
+    if oid:
+        return oid
+    return str(hash(json.dumps(item, sort_keys=True)))
+
 def load_json_dir(directory, debug=False):
     nodes = {}
     try:
@@ -260,8 +280,7 @@ def load_json_dir(directory, debug=False):
                         else:
                             obj_type = TYPE_FROM_META.get(meta_type, "Unknown")
                         item['ObjectType'] = obj_type
-                        # OID from data.id for Azure
-                        oid = item.get('data', {}).get('id') or item.get('ObjectIdentifier') or item.get('objectid') or item.get('ObjectId') or item.get('id') or str(hash(json.dumps(item)))
+                        oid = get_object_id(item)
                         nodes[oid] = item
                         added += 1
                         if debug and added <= 3:  # Print first 3 items for inspection

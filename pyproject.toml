@@ -13,7 +13,7 @@ dependencies = [
     "networkx>=3.0",
     "rich>=13.0",
     "tqdm>=4.0",
-    "pyyaml",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]

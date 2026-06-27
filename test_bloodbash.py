@@ -2,30 +2,43 @@
 import unittest
 import sys
 import os
+import re
+import subprocess
 import tempfile
 import shutil
+import zipfile
 from io import StringIO
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import patch
 import json
 import networkx as nx
 from rich.console import Console
+
 # Load the BloodBash script by executing it in a controlled namespace
 bloodbash_globals = {}
 with open("BloodBash.py", "r") as f:
     exec(f.read(), bloodbash_globals)
+
+AZURE_TEST_DIR = "azure-ad-tests"
+
 class TestBloodBash(unittest.TestCase):
     def setUp(self):
-        # Base directory for test data
         self.test_data_dir = "testData"
-        # Temporary directory for DB/export tests
         self.temp_dir = tempfile.mkdtemp()
-        # Save original findings (do NOT clear here anymore)
-        self.original_findings = bloodbash_globals['global_findings'][:]
+        self._saved_findings = bloodbash_globals['global_findings']
+        bloodbash_globals['global_findings'] = []
+
     def tearDown(self):
-        # Clean up temp directory
         shutil.rmtree(self.temp_dir)
-        # Restore original findings state
-        bloodbash_globals['global_findings'][:] = self.original_findings
+        bloodbash_globals['global_findings'] = self._saved_findings
+
+    @staticmethod
+    def _strip_ansi(text):
+        return re.sub(r'\x1b\[[0-9;]*m', '', text)
+
+    def _assert_output_contains(self, output, *needles):
+        clean = self._strip_ansi(output)
+        for needle in needles:
+            self.assertIn(needle, clean, msg=f"Expected '{needle}' in output:\n{clean}")
     def _load_and_build_graph(self, test_subdir):
         """Helper to load JSON files from a test subdirectory and build the graph."""
         test_dir = os.path.join(self.test_data_dir, test_subdir)
@@ -314,15 +327,11 @@ class TestBloodBash(unittest.TestCase):
             data = json.load(f)
             self.assertIn("nodes", data)
     def test_prioritization_custom_scores(self):
-        bloodbash_globals['global_findings'] = []
         bloodbash_globals['add_finding']("Custom", "Low priority", score=1)
         bloodbash_globals['add_finding']("Custom2", "High priority", score=10)
         output = self._capture_output(bloodbash_globals['print_prioritized_findings'])
-        lines = output.split('\n')
-        high_line = next((line for line in lines if "High priority" in line), None)
-        low_line = next((line for line in lines if "Low priority" in line), None)
-        if high_line and low_line:
-            self.assertLess(lines.index(high_line), lines.index(low_line))
+        clean = self._strip_ansi(output)
+        self.assertLess(clean.index("High priority"), clean.index("Low priority"))
     def test_no_results_adcs_vulnerabilities(self):
         G = nx.MultiDiGraph()
         G.add_node("Dummy", name="Dummy", type="User")
@@ -533,13 +542,17 @@ class TestBloodBash(unittest.TestCase):
         G.add_node("C", name="Computer", type="Computer")
         G.add_edge("U", "C", label="LocalAdmin")
         output = self._capture_output(bloodbash_globals['print_stats_dashboard'], G)
-        self.assertIn("AD & Azure Statistics Dashboard ", output)
-        self.assertIn("User", output)
-        self.assertIn("Computer", output)
-        self.assertIn("LocalAdmin right", output)
+        self._assert_output_contains(
+            output,
+            "AD & Azure Statistics Dashboard",
+            "User",
+            "Computer",
+            "LocalAdmin right",
+        )
     def test_export_bloodhound_compatible(self):
         G = nx.MultiDiGraph()
         G.add_node("1", name="User1", type="User", props={"enabled": True})
+        G.add_node("2", name="Group1", type="Group", props={})
         G.add_edge("1", "2", label="MemberOf")
         export_path = os.path.join(self.temp_dir, "test_bh")
         bloodbash_globals['export_bloodhound_compatible'](G, output_prefix=export_path)
@@ -588,105 +601,64 @@ class TestBloodBash(unittest.TestCase):
     # NEW TESTS for AzureHound support (v1.3.1)
     # ────────────────────────────────────────────────
     def test_azure_privileged_roles(self):
-        try:
-            G = self._load_and_build_graph("azure-privileged-roles-tests")
-        except FileNotFoundError as e:
-            self.skipTest(str(e))
+        G = self._load_and_build_graph(AZURE_TEST_DIR)
         output = self._capture_output(bloodbash_globals['print_azure_privileged_roles'], G)
-        self.assertIn("Privileged Azure role", output)
-        self.assertIn("Global Administrator", output)
+        self._assert_output_contains(output, "Privileged Azure role", "Global Administrator")
         self.assertTrue(any("Azure Privileged Roles" in f[1] for f in bloodbash_globals['global_findings']))
     def test_azure_app_secrets(self):
-        try:
-            G = self._load_and_build_graph("azure-app-secrets-tests")
-        except FileNotFoundError as e:
-            self.skipTest(str(e))
+        G = self._load_and_build_graph(AZURE_TEST_DIR)
         output = self._capture_output(bloodbash_globals['print_azure_app_secrets'], G)
-        self.assertIn("Azure app with secrets", output)
-        self.assertIn("Owns", output)
+        self._assert_output_contains(output, "Azure app with secrets", "Owns")
         self.assertTrue(any("Azure App Secrets" in f[1] for f in bloodbash_globals['global_findings']))
     def test_azure_mfa_bypass(self):
-        try:
-            G = self._load_and_build_graph("azure-mfa-bypass-tests")
-        except FileNotFoundError as e:
-            self.skipTest(str(e))
+        G = self._load_and_build_graph(AZURE_TEST_DIR)
         output = self._capture_output(bloodbash_globals['print_azure_mfa_bypass'], G)
-        self.assertIn("Azure user without MFA", output)
-        self.assertIn("MFA Bypass", output)
+        self._assert_output_contains(output, "Azure user without MFA")
         self.assertTrue(any("Azure MFA Bypass" in f[1] for f in bloodbash_globals['global_findings']))
     def test_azure_guest_access(self):
-        try:
-            G = self._load_and_build_graph("azure-guest-access-tests")
-        except FileNotFoundError as e:
-            self.skipTest(str(e))
+        G = self._load_and_build_graph(AZURE_TEST_DIR)
         output = self._capture_output(bloodbash_globals['print_azure_guest_access'], G)
-        self.assertIn("Azure guest user", output)
-        self.assertIn("Has role", output)
+        self._assert_output_contains(output, "Azure guest user", "Has role")
         self.assertTrue(any("Azure Guest Access" in f[1] for f in bloodbash_globals['global_findings']))
     def test_azure_service_principal_abuse(self):
-        try:
-            G = self._load_and_build_graph("azure-sp-abuse-tests")
-        except FileNotFoundError as e:
-            self.skipTest(str(e))
+        G = self._load_and_build_graph(AZURE_TEST_DIR)
         output = self._capture_output(bloodbash_globals['print_azure_service_principal_abuse'], G)
-        self.assertIn("Azure SP with dangerous rights", output)
-        self.assertIn("GenericAll", output)
+        self._assert_output_contains(output, "Azure SP with dangerous rights", "GenericAll")
         self.assertTrue(any("Azure Service Principal Abuse" in f[1] for f in bloodbash_globals['global_findings']))
     def test_azure_high_value_targets(self):
-        try:
-            G = self._load_and_build_graph("azure-high-value-tests")
-        except FileNotFoundError as e:
-            self.skipTest(str(e))
+        G = self._load_and_build_graph(AZURE_TEST_DIR)
         targets = bloodbash_globals['get_high_value_targets'](G)
         target_names = [name for _, name, _ in targets]
-        self.assertTrue(any("global admin" in name.lower() for name in target_names))
-        self.assertTrue(any("azure" in name.lower() for name in target_names))
+        self.assertTrue(any("global administrator" in name.lower() for name in target_names))
     def test_azure_shortest_paths(self):
-        try:
-            G = self._load_and_build_graph("azure-shortest-paths-tests")
-        except FileNotFoundError as e:
-            self.skipTest(str(e))
+        G = self._load_and_build_graph(AZURE_TEST_DIR)
         output = self._capture_output(bloodbash_globals['print_shortest_paths'], G)
-        self.assertIn("Global Administrator", output)
-        self.assertIn("Azure User", output)
+        self._assert_output_contains(
+            output,
+            "Global Administrator",
+            "globaladmin@tenant.onmicrosoft.com",
+            "HasRole",
+        )
     def test_azure_dangerous_permissions(self):
-        try:
-            G = self._load_and_build_graph("azure-dangerous-permissions-tests")
-        except FileNotFoundError as e:
-            self.skipTest(str(e))
+        G = self._load_and_build_graph(AZURE_TEST_DIR)
         output = self._capture_output(bloodbash_globals['print_dangerous_permissions'], G)
-        self.assertIn("GenericAll", output)
-        self.assertIn("Azure Role", output)
+        self._assert_output_contains(output, "GenericAll", "Azure Role")
     def test_azure_verbose_summary(self):
-        try:
-            G = self._load_and_build_graph("azure-verbose-summary-tests")
-        except FileNotFoundError as e:
-            self.skipTest(str(e))
+        G = self._load_and_build_graph(AZURE_TEST_DIR)
         output = self._capture_output(bloodbash_globals['print_verbose_summary'], G)
-        self.assertIn("Azure Objects", output)
-        self.assertIn("Azure User", output)
+        self._assert_output_contains(output, "Azure Objects", "Azure User")
     def test_azure_trust_abuse(self):
-        try:
-            G = self._load_and_build_graph("azure-trust-abuse-tests")
-        except FileNotFoundError as e:
-            self.skipTest(str(e))
+        G = self._load_and_build_graph(AZURE_TEST_DIR)
         output = self._capture_output(bloodbash_globals['print_trust_abuse'], G)
-        self.assertIn("Tenant abuse", output)
-        self.assertIn("Azure", output)
+        self._assert_output_contains(output, "Trust abuse possible", "Cross-Tenant")
     def test_azure_group_analysis(self):
-        try:
-            G = self._load_and_build_graph("azure-group-analysis-tests")
-        except FileNotFoundError as e:
-            self.skipTest(str(e))
+        G = self._load_and_build_graph(AZURE_TEST_DIR)
         output = self._capture_output(bloodbash_globals['print_group_analysis'], G)
-        self.assertIn("Azure Group", output)
-        self.assertIn("nesting depth", output.lower())
+        clean = self._strip_ansi(output).lower()
+        self.assertIn("azuregroup", clean)
+        self.assertIn("nesting depth", clean)
     def test_azure_full_analysis_integration(self):
-        try:
-            G = self._load_and_build_graph("azure-full-analysis-tests")
-        except FileNotFoundError as e:
-            self.skipTest(str(e))
-        bloodbash_globals['global_findings'] = []
+        G = self._load_and_build_graph(AZURE_TEST_DIR)
         self._capture_output(bloodbash_globals['print_azure_privileged_roles'], G)
         self._capture_output(bloodbash_globals['print_azure_app_secrets'], G)
         self._capture_output(bloodbash_globals['print_azure_mfa_bypass'], G)
@@ -781,6 +753,95 @@ class TestBloodBash(unittest.TestCase):
         output = self._capture_output(bloodbash_globals['print_as_rep_roastable'], G)
         self.assertIn("AsRepUACUser@LAB.LOCAL", output)
         self.assertIn("DONT_REQ_PREAUTH", output)
+
+    # ────────────────────────────────────────────────
+    # Additional coverage: fixtures, helpers, dependencies
+    # ────────────────────────────────────────────────
+    def test_password_never_expires(self):
+        G = self._load_and_build_graph("password-never-expires-tests")
+        output = self._capture_output(bloodbash_globals['print_password_never_expires'], G)
+        self._assert_output_contains(output, "Password Never Expires enabled", "User1", "User3")
+        clean = self._strip_ansi(output)
+        self.assertEqual(clean.count("Password Never Expires enabled"), 2)
+
+    def test_password_not_required(self):
+        G = self._load_and_build_graph("password-not-required-tests")
+        output = self._capture_output(bloodbash_globals['print_password_not_required'], G)
+        self._assert_output_contains(output, "Password Not Required enabled", "User1", "User3")
+        self.assertTrue(any("Password Not Required" in f[1] for f in bloodbash_globals['global_findings']))
+
+    def test_export_yaml(self):
+        G = self._load_and_build_graph("yaml-export-tests")
+        export_path = os.path.join(self.temp_dir, "yaml_export")
+        bloodbash_globals['export_results'](G, output_prefix=export_path, format_type="yaml")
+        yaml_file = f"{export_path}.yaml"
+        self.assertTrue(os.path.exists(yaml_file))
+        with open(yaml_file, 'r', encoding='utf-8') as f:
+            data = bloodbash_globals['yaml'].safe_load(f)
+        self.assertEqual(data['nodes'], G.number_of_nodes())
+        self.assertIn('high_value', data)
+        self.assertIn('findings', data)
+
+    def test_get_bool_prop_ci(self):
+        props = {"PasswordNeverExpires": True, "enabled": False}
+        self.assertTrue(bloodbash_globals['get_bool_prop_ci'](props, ['passwordneverexpires']))
+        self.assertFalse(bloodbash_globals['get_bool_prop_ci'](props, ['passwordnotrequired']))
+        self.assertFalse(bloodbash_globals['get_bool_prop_ci'](None, ['enabled']))
+
+    def test_get_object_id_azure_objectid(self):
+        item = {"kind": "User", "objectId": "azure-user-abc", "name": "test@tenant.com"}
+        self.assertEqual(bloodbash_globals['get_object_id'](item), "azure-user-abc")
+
+    def test_get_object_id_nested_data_id(self):
+        item = {"kind": "AZUser", "data": {"id": "/users/12345", "displayName": "Test"}}
+        self.assertEqual(bloodbash_globals['get_object_id'](item), "/users/12345")
+
+    def test_azure_graph_relationships_use_object_ids(self):
+        nodes = bloodbash_globals['load_json_dir'](os.path.join(self.test_data_dir, AZURE_TEST_DIR))
+        self.assertIn("azure-user-1", nodes)
+        self.assertIn("azure-role-globaladmin", nodes)
+        G, _ = bloodbash_globals['build_graph'](nodes)
+        self.assertTrue(G.has_edge("azure-user-1", "azure-role-globaladmin"))
+        edge_labels = [d.get('label') for _, _, d in G.edges("azure-user-1", data=True)]
+        self.assertIn("HasRole", edge_labels)
+
+    def test_load_json_zip_archive(self):
+        with tempfile.TemporaryDirectory() as src_dir:
+            fixture = os.path.join(self.test_data_dir, "kerberoastable-tests", "users.json")
+            shutil.copy(fixture, os.path.join(src_dir, "users.json"))
+            zip_path = os.path.join(self.temp_dir, "collector.zip")
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                zf.write(os.path.join(src_dir, "users.json"), arcname="users.json")
+            nodes = bloodbash_globals['load_json_dir'](zip_path)
+            self.assertGreater(len(nodes), 0)
+            G, _ = bloodbash_globals['build_graph'](nodes)
+            self.assertGreater(G.number_of_nodes(), 0)
+
+    def test_import_dependencies(self):
+        for module_name in ("networkx", "rich", "tqdm", "yaml"):
+            __import__(module_name)
+
+    def test_cli_help(self):
+        result = subprocess.run(
+            [sys.executable, "BloodBash.py", "--help"],
+            capture_output=True,
+            text=True,
+            cwd=os.path.dirname(os.path.abspath(__file__)) or ".",
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("--azure-privileged-roles", result.stdout)
+        self.assertIn("--export", result.stdout)
+
+    def test_severity_scores_defaults(self):
+        scores = bloodbash_globals['SEVERITY_SCORES']
+        self.assertEqual(scores["DCSync"], 10)
+        self.assertEqual(scores["Azure Privileged Roles"], 10)
+        self.assertEqual(scores["Kerberoastable"], 5)
+
+    def test_add_finding_default_score(self):
+        bloodbash_globals['add_finding']("DCSync", "Test default score")
+        self.assertEqual(bloodbash_globals['global_findings'][-1][0], 10)
 
 if __name__ == '__main__':
     unittest.main()

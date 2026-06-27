@@ -15,6 +15,7 @@ Perfect for red teamers, OSCP/CRTP/PNPT prep, quick post-collection triage, or w
 ![BloodBash verbose output example](https://i.imgur.com/RRUtTD0.png)
 
 ## What's New in v1.3.1
+- **Updated Metasploit auxiliary module** — full parity with CLI flags (AD + Azure, exports, pathfinding, GPO XML, SQLite cache)
 - **Full AzureHound / Entra ID (Azure AD) support** — mixed AD + Azure datasets in the same run
 - New Azure analysis modules with dedicated severity scoring & abuse panels:
   - Azure Privileged Roles (Global Admin, Privileged Role Admin, etc.)
@@ -131,6 +132,44 @@ python3 BloodBash.py . --db bloodbash.db --all
 
 If **no flags** are given, the tool runs a minimal default mode (verbose summary + common checks).
 
+## Metasploit Integration
+
+BloodBash includes an auxiliary module for [Metasploit Framework](https://github.com/rapid7/metasploit-framework) that wraps the Python CLI and reports parsed findings into the Metasploit database.
+
+### Setup
+
+1. Install BloodBash and its Python dependencies (see [Installation](#installation) above).
+2. Copy the module into your Metasploit tree:
+
+```bash
+cp modules/auxiliary/analyzer/bloodbash_analyzer.rb \
+  /opt/metasploit-framework/modules/auxiliary/analyzer/bloodbash_analyzer.rb
+```
+
+Adjust the destination path if Metasploit is installed elsewhere.
+
+3. Reload modules in `msfconsole`:
+
+```bash
+msfconsole -q -x "reload_all; exit"
+```
+
+### Usage
+
+```bash
+msfconsole
+use auxiliary/analyzer/bloodbash_analyzer
+set BLOODBASH_PATH /path/to/BloodBash/BloodBash.py
+set JSON_DIR /path/to/SharpHound_or_AzureHound_JSON
+set ALL_CHECKS true
+set VERBOSE true
+run
+```
+
+The module exposes the same analysis options as the CLI, including Azure checks (`AZURE_PRIVILEGED_ROLES`, `AZURE_APP_SECRETS`, `AZURE_MFA_BYPASS`, `AZURE_GUEST_ACCESS`, `AZURE_SP_ABUSE`), delegation and credential checks, exports (`EXPORT`, `EXPORT_BH`, `DOT`), path options (`OWNED`, `PATH_FROM`, `PATH_TO`), SQLite caching (`DB`), and filtering (`DOMAIN`, `FAST`, `INDIRECT`, `DEEP_ANALYSIS`, `DEBUG`).
+
+Set `PYTHON` if `python3` is not on your `PATH`. `JSON_DIR` accepts a directory of collector JSON files or a `.zip` archive (same as the CLI).
+
 ![BloodBash verbose output example](https://i.imgur.com/zqsjVgC.png)
 ![BloodBash verbose output example](https://i.imgur.com/GtGvchM.png)
 ![BloodBash verbose output example](https://i.imgur.com/tTHVUuy.png)
@@ -156,6 +195,7 @@ If **no flags** are given, the tool runs a minimal default mode (verbose summary
 - Exports: Markdown, JSON, HTML, CSV, YAML, **BloodHound-compatible JSON**, Graphviz DOT
 - SQLite database persistence (`--db`)
 - Domain/tenant filtering, fast mode, debug mode
+- **Metasploit auxiliary module** for offline analysis and DB reporting
 
 ![BloodBash verbose output example](https://i.imgur.com/4rbBgDW.png)
 ![BloodBash verbose output example](https://i.imgur.com/ODvkG6a.png)
