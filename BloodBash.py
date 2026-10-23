@@ -10,6 +10,8 @@ import networkx as nx
 from collections import defaultdict, Counter
 from datetime import date, datetime, timezone
 from rich.console import Console
+from rich.markup import escape as rich_escape
+from rich.errors import MarkupError
 from rich.table import Table
 from rich.panel import Panel
 from rich.progress import Progress
@@ -36,6 +38,36 @@ __org_url__ = "https://squidoffense.com/"
 __project_url__ = "https://github.com/DotNetRussell/BloodBash"
 
 console = Console()
+
+
+def _install_markup_guard(target_console: Console) -> None:
+    """
+    Never let collector data abort a run.
+
+    Object names and descriptions are attacker-controlled; a stray ``[/]`` used
+    to raise MarkupError and kill the whole analysis. Malformed markup now falls
+    back to literal text.
+    """
+    original_print = target_console.print
+
+    def _safe_print(*args, **kwargs):
+        try:
+            return original_print(*args, **kwargs)
+        except MarkupError:
+            escaped = [
+                rich_escape(a) if isinstance(a, str) else a
+                for a in args
+            ]
+            try:
+                return original_print(*escaped, **kwargs)
+            except MarkupError:
+                return original_print(*escaped, markup=False, **kwargs)
+
+    target_console.print = _safe_print  # type: ignore[method-assign]
+
+
+_install_markup_guard(console)
+
 # ────────────────────────────────────────────────
 # Severity Scoring
 # ────────────────────────────────────────────────
@@ -148,7 +180,7 @@ def collapse_findings(
                     top_score,
                     cat,
                     f"{len(rest)} additional {cat} finding(s) collapsed "
-                    f"(showing top {len(keep)}; use --export json for full list before collapse)",
+                    f"(showing top {len(keep)}; full list in --export json findings_raw)",
                 )
             )
     return sorted(out, key=lambda x: x[0], reverse=True)
@@ -2582,6 +2614,28 @@ def print_list_domains(G):
     )
 
 
+def warn_if_domain_filter_empty(G, domain_filter=None) -> bool:
+    """
+    Warn (and flag) when --domain matches nothing.
+
+    Previously an unknown domain silently produced an empty analysis and exit 0,
+    which looked like a clean result.
+    """
+    if not domain_filter:
+        return False
+    matches = sum(1 for _, d in G.nodes(data=True) if _domain_matches(d, domain_filter))
+    if matches:
+        return False
+    known = sorted({r["name"] for r in list_domains(G)})
+    console.print(
+        f"[bold red]No objects match --domain {domain_filter}.[/bold red] "
+        "Nothing was analyzed; this is not a clean result."
+    )
+    if known:
+        console.print(f"[dim]Domains in this collection: {', '.join(known[:10])}[/dim]")
+    return True
+
+
 def print_verbose_summary(G, domain_filter=None):
     console.rule("[bold magenta]VERBOSE SUMMARY[/bold magenta]")
     types_count = defaultdict(int)
@@ -2590,7 +2644,7 @@ def print_verbose_summary(G, domain_filter=None):
     for _, d in G.nodes(data=True):
         if not _domain_matches(d, domain_filter):
             continue
-        types_count[d['type']] += 1
+        types_count[d.get('type') or 'Unknown'] += 1
         if d.get('is_azure', False):
             azure_count += 1
         else:
@@ -2602,7 +2656,7 @@ def print_verbose_summary(G, domain_filter=None):
         table.add_row(t, str(cnt))
     console.print(table)
     console.print(f"[cyan]AD Objects: {ad_count} | Azure Objects: {azure_count}[/cyan]")
-    users = [d['name'] for _, d in G.nodes(data=True) if d['type'].lower() in ['user', 'azure user'] and _domain_matches(d, domain_filter)]
+    users = [d.get('name') for _, d in G.nodes(data=True) if str(d.get('type') or '').lower() in ['user', 'azure user'] and _domain_matches(d, domain_filter)]
     if users:
         console.print(f"\n[bold cyan]Users (AD + Azure) ({len(users)}):[/bold cyan]")
         for name in sorted(users)[:30]:
@@ -2919,8 +2973,13 @@ def get_high_value_targets(G, domain_filter=None, include_all_highvalue=False):
             continue
         keywords = azure_keywords if is_azure else ad_keywords
         is_ca_type = (not is_azure) and (typ in ca_types or typ.endswith(' ca'))
-        is_azure_role = is_azure and 'role' in typ
-        if any(k in name for k in keywords) or is_ca_type or is_azure_role:
+        # Azure custom roles are not inherently high value; only privileged role
+        # names or roles the collector marks highvalue qualify.
+        if is_azure and 'role' in typ:
+            if any(k in name for k in keywords) or marked_hv:
+                targets.append((n, d['name'], d['type']))
+            continue
+        if any(k in name for k in keywords) or is_ca_type:
             targets.append((n, d['name'], d['type']))
     return sorted(targets, key=lambda x: x[1])
 def format_path(G, path):
@@ -2982,7 +3041,8 @@ def print_password_in_descriptions(G, domain_filter=None):
                         sec.mark()
                         console.print(
                             f"[yellow]Potential password in description[/yellow]: "
-                            f"[green]{d['name']}[/green] - '{props.get('description')}'"
+                            f"[green]{rich_escape(str(d['name']))}[/green] - "
+                            f"'{rich_escape(str(description))}'"
                         )
                         add_finding(
                             "Password in Description",
@@ -3839,12 +3899,24 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
     }
     # CT_FLAG_NO_SECURITY_EXTENSION = 0x00080000 in msPKI-Enrollment-Flag
     NO_SECURITY_EXT_BIT = 0x00080000
+    # CT_FLAG_PEND_ALL_REQUESTS = 0x00000002 (manager approval)
+    PEND_ALL_REQUESTS_BIT = 0x00000002
 
     def _enrollment_flag_text(props):
         raw = _prop_raw_ci(props, ['enrollmentflag', 'EnrollmentFlag', 'mspki-enrollment-flag'])
         if raw is None:
             return ''
         return str(raw)
+
+    def _enrollment_flag_int(props):
+        """Numeric msPKI-Enrollment-Flag, or None when absent/undefined."""
+        raw = _prop_raw_ci(props, ['enrollmentflag', 'EnrollmentFlag', 'mspki-enrollment-flag'])
+        if raw is None or isinstance(raw, bool):
+            return None
+        try:
+            return int(str(raw).strip(), 0)
+        except (TypeError, ValueError):
+            return None
 
     def _has_no_security_extension(props):
         if get_bool_prop_ci(
@@ -3855,10 +3927,8 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
         text = _enrollment_flag_text(props).upper()
         if 'NO_SECURITY_EXTENSION' in text or 'NOSECURITYEXTENSION' in text.replace('_', ''):
             return True
-        try:
-            return bool(int(text) & NO_SECURITY_EXT_BIT)
-        except (TypeError, ValueError):
-            return False
+        flags = _enrollment_flag_int(props)
+        return bool(flags is not None and flags & NO_SECURITY_EXT_BIT)
 
     def _nondefault_holders(incoming, right_set):
         holders = []
@@ -3903,9 +3973,14 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
         requires_mgr_approval = get_bool_prop_ci(
             props, ['requiresmanagerapproval', 'RequiresManagerApproval'], default=False
         )
-        # Pending all requests / manager approval via enrollment flags
+        # Pending all requests / manager approval via enrollment flags.
+        # Numeric msPKI-Enrollment-Flag must be decoded: string matching alone
+        # missed PEND_ALL_REQUESTS, which produced false ESC1 findings.
         enroll_flag_text = _enrollment_flag_text(props).upper()
-        if 'PEND_ALL_REQUESTS' in enroll_flag_text:
+        if 'PEND_ALL_REQUESTS' in enroll_flag_text or 'PENDALLREQUESTS' in enroll_flag_text.replace('_', ''):
+            requires_mgr_approval = True
+        enroll_flags = _enrollment_flag_int(props)
+        if enroll_flags is not None and enroll_flags & PEND_ALL_REQUESTS_BIT:
             requires_mgr_approval = True
         no_approval = not requires_mgr_approval
         # ESC6: CA allows user-specified SAN (value may be missing if only *Collected)
@@ -5351,7 +5426,7 @@ def print_shortest_paths(
 
     users = [
         n for n, d in G.nodes(data=True)
-        if d['type'].lower() in ['user', 'azure user'] and _domain_matches(d, domain_filter)
+        if str(d.get('type') or '').lower() in ['user', 'azure user'] and _domain_matches(d, domain_filter)
     ]
     targets = get_high_value_targets(G, domain_filter)
     if target_filter:
@@ -7357,7 +7432,7 @@ def print_stats_dashboard(G, domain_filter=None):
     azure_count = 0
     ad_count = 0
     for _, d in filtered_nodes:
-        by_type[d['type']] += 1
+        by_type[d.get('type') or 'Unknown'] += 1
         if d.get('is_azure', False):
             azure_count += 1
         else:
@@ -7393,8 +7468,16 @@ def print_stats_dashboard(G, domain_filter=None):
         pct_table.add_row(desc, str(pct), str(tot))
     console.print(pct_table)
 
-    computers = sum(1 for _, d in filtered_nodes if d['type'].lower() == 'computer')
-    local_admins = len({u for u, v, d in G.edges(data=True) if d.get('label') == 'LocalAdmin' and G.nodes[v]['type'].lower() == 'computer'})
+    computers = sum(
+        1 for _, d in filtered_nodes
+        if str(d.get('type') or '').lower() == 'computer'
+    )
+    local_admins = len({
+        u
+        for u, v, d in G.edges(data=True)
+        if d.get('label') == 'LocalAdmin'
+        and str((G.nodes.get(v) or {}).get('type') or '').lower() == 'computer'
+    })
     console.print(f"[cyan]Computers with at least one LocalAdmin right: {local_admins}/{computers} ({local_admins/computers*100 if computers else 0:.1f}%)[/cyan]")
     hv = len(get_high_value_targets(G, domain_filter))
     console.print(f"[cyan]High-value targets: {hv}[/cyan]")
@@ -7432,6 +7515,21 @@ def print_azure_privileged_roles(G, domain_filter=None):
         print_abuse_panel("Azure Privileged Roles")
     else:
         console.print("[green]No privileged Azure role assignments detected[/green]")
+def _azure_expected_credential_holder(G, oid) -> bool:
+    """Tenant roles that are expected to own/manage apps (noise filter)."""
+    if oid not in G:
+        return False
+    d = G.nodes[oid]
+    name = (d.get("name") or "").lower()
+    typ = str(d.get("type") or "").lower()
+    if typ != "azure role":
+        return False
+    return any(
+        needle in name
+        for needle in ("global administrator", "application administrator", "cloud application administrator")
+    )
+
+
 def print_azure_app_secrets(G, domain_filter=None):
     console.rule("[bold magenta]Azure Application Secrets/Certificates Exposure[/bold magenta]")
     found = False
@@ -7453,6 +7551,10 @@ def print_azure_app_secrets(G, domain_filter=None):
             (u, edata.get('label'))
             for u, _, edata in incoming
             if (edata.get('label') or '').lower() in abuse_rights
+            # Global Admins / app admins owning apps is expected tenant design,
+            # not an abuse path worth a finding.
+            and not _is_default_high_priv_name(G.nodes[u].get('name') or '')
+            and not _azure_expected_credential_holder(G, u)
         ]
         if not abuse_edges:
             continue
@@ -8348,7 +8450,8 @@ def collect_password_age_rows(G, domain_filter=None, now: Optional[float] = None
         bucket = _assign_age_bucket(days, PASSWORD_AGE_BUCKETS) if days is not None else "Never set / unknown"
         rows.append({
             "name": d["name"],
-            "enabled": bool(props.get("enabled", props.get("Enabled", True))),
+            # "false"/UAC-disabled must not read as enabled (string is truthy)
+            "enabled": _account_is_enabled(props),
             "pwdlastset_unix": ts,
             "days_old": None if days is None else round(days, 1),
             "bucket": bucket,
@@ -8380,7 +8483,7 @@ def collect_stale_account_rows(G, domain_filter=None, now: Optional[float] = Non
                     bucket = label
         rows.append({
             "name": d["name"],
-            "enabled": bool(props.get("enabled", props.get("Enabled", True))),
+            "enabled": _account_is_enabled(props),
             "lastlogon_unix": ts,
             "days_inactive": None if days is None else round(days, 1),
             "bucket": bucket,
@@ -9208,7 +9311,9 @@ def parse_writable_file(path: str) -> List[dict]:
         if not line or line.startswith("#"):
             continue
         lower = line.lower()
-        if lower.startswith("target") and ("\t" in line or "," in line):
+        # Header row of a one-column TSV (e.g. "target") is not a target
+        first_col = re.split(r"[\t,]", line, maxsplit=1)[0].strip().lower()
+        if first_col in ("target", "object", "dn", "name", "distinguishedname", "samaccountname"):
             continue
         if "\t" in line:
             parts = [p.strip() for p in line.split("\t") if p.strip()]
@@ -10000,15 +10105,32 @@ def _html_table(headers: Sequence[str], rows: Sequence[Sequence[Any]], sortable:
     return f"<table class=\"{cls}\"><thead><tr>{thead}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>"
 
 
+def _csv_safe_cell(value: Any) -> Any:
+    """
+    Neutralize spreadsheet formula injection.
+
+    A name beginning with = + - @ is executed by Excel/Sheets on open. Prefix
+    with an apostrophe so the cell renders as text. Numbers are left alone.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (int, float, bool)):
+        return value
+    text = str(value)
+    if text and text[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + text
+    return text
+
+
 def write_csv_file(path: str, headers: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(list(headers))
+        w.writerow([_csv_safe_cell(h) for h in headers])
         for row in rows:
-            w.writerow(list(row))
+            w.writerow([_csv_safe_cell(c) for c in row])
     return path
 
 
@@ -10623,6 +10745,12 @@ def build_export_report(G, domain_filter=None):
         {"score": score, "category": cat, "details": det}
         for score, cat, det in collapsed
     ]
+    # Pre-collapse rows: the console tells users to use --export json for these,
+    # so the export must actually carry them.
+    raw_findings = [
+        {"score": score, "category": cat, "details": det}
+        for score, cat, det in sorted(global_findings, key=lambda x: x[0], reverse=True)
+    ]
     return {
         "tool": "BloodBash",
         "version": __version__,
@@ -10633,6 +10761,7 @@ def build_export_report(G, domain_filter=None):
         "edges": G.number_of_edges(),
         "high_value": high_value,
         "findings": findings,
+        "findings_raw": raw_findings,
         "findings_raw_count": len(global_findings),
         "findings_collapsed_count": len(collapsed),
     }
@@ -10722,18 +10851,35 @@ def export_bloodhound_compatible(G, output_prefix="bloodbash_bh"):
         json.dump(bh_data, f, indent=2)
     console.print(f"[green]Exported BloodHound-compatible JSON:[/green] {path}")
 
+def _dot_escape(value: Any) -> str:
+    """Escape a Graphviz quoted-string body (backslash, quotes, newlines)."""
+    text = str(value if value is not None else "")
+    return (
+        text.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r\n", "\\n")
+        .replace("\n", "\\n")
+        .replace("\r", "\\n")
+    )
+
+
 def export_to_dot(G, dot_path, domain_filter=None):
     with open(dot_path, "w", encoding="utf-8") as f:
         f.write("digraph BloodBash {\n  rankdir=LR;\n  node [shape=box];\n")
         for n, d in G.nodes(data=True):
             if not _domain_matches(d, domain_filter):
                 continue
-            color = "red" if any(k in d['name'].lower() for k in ['admin', 'krbtgt', 'ca', 'template', 'global admin']) else "blue"
-            f.write(f'  "{d["name"]}" [label="{d["name"]}\\n{d["type"]}", color={color}];\n')
+            name = d.get("name") or str(n)
+            typ = d.get("type") or "Unknown"
+            color = "red" if any(k in name.lower() for k in ['admin', 'krbtgt', 'ca', 'template', 'global admin']) else "blue"
+            f.write(
+                f'  "{_dot_escape(n)}" [label="{_dot_escape(name)}\\n{_dot_escape(typ)}", color={color}];\n'
+            )
         for u, v, d in G.edges(data=True):
             if domain_filter and not (_domain_matches(G.nodes[u], domain_filter) or _domain_matches(G.nodes[v], domain_filter)):
                 continue
-            f.write(f'  "{G.nodes[u]["name"]}" -> "{G.nodes[v]["name"]}" [label="{d.get("label", "?")}"];\n')
+            label = _dot_escape(d.get("label", "?"))
+            f.write(f'  "{_dot_escape(u)}" -> "{_dot_escape(v)}" [label="{label}"];\n')
         f.write("}\n")
     console.print(f"[green]Exported Graphviz DOT:[/green] {dot_path}")
     console.print(f"[dim]Render with: dot -Tpng {dot_path} -o graph.png[/dim]")
@@ -11622,6 +11768,9 @@ def main():
     if args.list_domains:
         print_list_domains(G)
         return
+
+    if warn_if_domain_filter_empty(G, args.domain):
+        sys.exit(3)
 
     run_inventory = bool(args.inventory)
     if run_inventory:
