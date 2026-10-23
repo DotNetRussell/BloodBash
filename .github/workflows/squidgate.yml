@@ -12,9 +12,7 @@ permissions:
 
 jobs:
   squidgate:
-    # Same-repo PRs only — never run fork workflow code on self-hosted
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, X64, squidsec]
+    runs-on: ubuntu-latest
     env:
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
     steps:
@@ -24,15 +22,14 @@ jobs:
 
       - name: SquidGate
         if: env.LLM_API_KEY != ''
-        uses: SquidSec/SquidGate@5424e7343abbd7663bcc31920969f5a778ec8487 # v1.0.0-build.4
+        uses: SquidSec/SquidGate@v1
         with:
           llm-api-key: ${{ env.LLM_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          llm-provider: custom
-          llm-model: grok-build-0.1
-          llm-base-url: https://api.x.ai/v1
+          llm-provider: opencode-go
+          llm-model: deepseek-v4.1-flash
 
       - name: SquidGate not configured
         if: env.LLM_API_KEY == ''
         run: |
-          echo "::notice title=SquidGate::Add repository secret LLM_API_KEY to enable the PR security gate (SquidSec/SquidGate@v1.0.0-build.4)."
+          echo "::notice title=SquidGate::Add the LLM_API_KEY secret (OpenCode Go key) to enable the PR security gate."
