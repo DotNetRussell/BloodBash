@@ -32,7 +32,7 @@ import tempfile
 import shutil
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-__version__ = "1.4.2"
+__version__ = "1.5.0"
 logger = logging.getLogger("bloodbash")
 __org__ = "SquidSec"
 __org_tagline__ = "Open source security tooling by SquidSec"
