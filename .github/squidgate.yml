@@ -3,8 +3,8 @@
 version: 1
 
 llm:
-  provider: opencode-go
-  model: deepseek-v4.1-flash-1017
+  provider: custom
+  model: deepseek/deepseek-v4.1-flash-1017
 
 policy:
   block_on: high
