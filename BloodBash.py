@@ -530,6 +530,33 @@ AZURE_REL_KIND_MAP = {
 }
 
 
+# Keys that only AzureHound / Entra exports carry. Used for case-insensitive
+# Azure detection without scanning free text (names, descriptions).
+_AZURE_MARKER_KEYS = frozenset({
+    "@odata.context",
+    "odata.context",
+    "cloudanchorobject",
+    "cloudanchor",
+    "tenantid",
+    "appid",
+    "serviceprincipalid",
+    "roleid",
+    "onpremisesimmutableid",
+})
+
+
+def _has_azure_odata_link(item) -> bool:
+    """True when an item carries an AzureHound/Graph context or annotation link."""
+    if not isinstance(item, dict):
+        return False
+    for key, value in item.items():
+        if str(key).startswith("@odata."):
+            return True
+        if isinstance(value, str) and "graph.microsoft.com" in value.lower():
+            return True
+    return False
+
+
 def _azure_ref_id(ref) -> Optional[str]:
     """Extract an object id from an AzureHound nested principal/ref object."""
     if ref is None:
@@ -848,7 +875,9 @@ def load_json_dir(directory, debug=False):
             extract_to = Path(extract_cm.name)
             _safe_extract_zip(path_obj, extract_to)
             directory = str(extract_to)
-        files = [f for f in os.listdir(directory) if f.lower().endswith('.json')]
+        if not os.path.isdir(directory):
+            raise FileNotFoundError(directory)
+        files = _collector_json_relpaths(directory)
     except FileNotFoundError:
         console.print(f"[yellow]Warning: Directory '{directory}' not found. Skipping.[/yellow]")
         if extract_cm is not None:
@@ -864,6 +893,47 @@ def load_json_dir(directory, debug=False):
     finally:
         if extract_cm is not None:
             extract_cm.cleanup()
+
+
+POST_COLLECTION_DIR_NAMES = frozenset({
+    "processed", "reports", "old", "archive", "archived", "previous",
+    "backup", "backups", "cache", ".cache",
+})
+
+# Collector trees are shallow (zip root or one containing folder). Bound the
+# walk so a mistaken path like $HOME cannot turn into a multi-minute scan.
+COLLECTOR_MAX_DEPTH = 3
+
+
+def _collector_json_relpaths(directory) -> List[str]:
+    """
+    Top-level and nested ``*.json`` collector files, as paths relative to root.
+
+    SharpHound zips often unpack into a containing folder, and users unzip into
+    ``bloodhound/`` subdirectories. Only the top level was read before, which
+    silently loaded zero objects for those layouts.
+    """
+    root = Path(directory)
+    found: List[str] = []
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            rel_dir = os.path.relpath(dirpath, root)
+            depth = 0 if rel_dir == "." else len(Path(rel_dir).parts)
+            if depth >= COLLECTOR_MAX_DEPTH:
+                dirnames[:] = []
+            # Skip processed/report folders (BloodHound CE writes those next to data)
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if d.lower() not in POST_COLLECTION_DIR_NAMES and not d.startswith(".")
+            )
+            for name in sorted(filenames):
+                if not name.lower().endswith(".json"):
+                    continue
+                rel = name if rel_dir == "." else os.path.join(rel_dir, name)
+                found.append(rel)
+    except OSError:
+        return []
+    return found
 
 
 def _parse_json_dir(directory, debug, nodes, azure_pending_edges, files):
@@ -952,16 +1022,17 @@ def _parse_json_dir(directory, debug, nodes, azure_pending_edges, files):
                             continue
                         kind_raw = item.get('kind') or item.get('Kind') or ''
                         kind_l = str(kind_raw).lower()
-                        # Detect Azure (case-insensitive checks, expanded)
                         item_lower = {k.lower(): v for k, v in item.items()}
+                        # Detect Azure from schema signals only. Free-text scanning
+                        # misclassified AD objects whose name or description merely
+                        # mentioned "azure"/"microsoft.com".
                         is_azure = (
                             meta_type.startswith("azure")
                             or bool(kind_l.startswith("az"))
-                            or any(k in ['@odata.context', 'odata.context', 'cloudanchorobject'] for k in item_lower.keys())
                             or any(
-                                v and isinstance(v, str) and ('microsoft.com' in v.lower() or 'azure' in v.lower())
-                                for v in item_lower.values() if isinstance(v, str)
+                                k in _AZURE_MARKER_KEYS for k in item_lower.keys()
                             )
+                            or _has_azure_odata_link(item)
                         )
                         # AzureHound relationship kinds → pending edges (not entity nodes)
                         rel_spec = AZURE_REL_KIND_MAP.get(kind_l)
@@ -1075,9 +1146,17 @@ def _parse_json_dir(directory, debug, nodes, azure_pending_edges, files):
                             or item.get('objectid')
                             or get_object_id(item)
                         )
-                        if oid in nodes and debug:
-                            console.print(f"[yellow]DEBUG: OID collision, last write wins: {oid}[/yellow]")
-                        nodes[oid] = item
+                        if oid in nodes and isinstance(nodes[oid], dict):
+                            # A later dump that lacks Members/Aces/MemberOf must not
+                            # erase relationships from the earlier one.
+                            merged_item = merge_collector_nodes(nodes[oid], item)
+                            if debug and merged_item is not item:
+                                console.print(
+                                    f"[yellow]DEBUG: OID collision, merged: {oid}[/yellow]"
+                                )
+                            nodes[oid] = merged_item
+                        else:
+                            nodes[oid] = item
                         added += 1
                         if debug and added <= 3:  # Print first 3 items for inspection
                             console.print(f"[blue]DEBUG: Sample item keys: {list(item.keys())}[/blue]")
@@ -2046,9 +2125,11 @@ def collect_collection_file_records(paths: Sequence[str]) -> List[Tuple[str, int
             except OSError:
                 records.append((str(p) + os.sep, -1, -1))
                 continue
-            if not names:
+            # Nested collector trees are ingested too, so they must invalidate cache
+            nested = _collector_json_relpaths(p)
+            if not names and not nested:
                 records.append((str(p) + os.sep, 0, 0))
-            for name in names:
+            for name in dict.fromkeys(list(names) + nested):
                 fp = p / name
                 try:
                     st = fp.stat()
@@ -2276,7 +2357,7 @@ def load_graph_from_db(db_path):
 
 
 def sources_have_collection_data(paths: Sequence[str]) -> bool:
-    """True if any path is a zip or a directory with at least one top-level JSON."""
+    """True if any path is a zip or a directory with at least one collector JSON."""
     for raw in paths:
         if not raw:
             continue
@@ -2284,10 +2365,8 @@ def sources_have_collection_data(paths: Sequence[str]) -> bool:
         try:
             if p.is_file() and p.suffix.lower() == ".zip":
                 return True
-            if p.is_dir():
-                for name in os.listdir(p):
-                    if name.lower().endswith(".json"):
-                        return True
+            if p.is_dir() and _collector_json_relpaths(p):
+                return True
         except OSError:
             continue
     return False
