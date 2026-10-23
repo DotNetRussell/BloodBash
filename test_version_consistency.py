@@ -8,7 +8,6 @@ a version that does not match the tag.
 from __future__ import annotations
 
 import re
-import tomllib
 import unittest
 from pathlib import Path
 
@@ -25,8 +24,17 @@ def _source_version() -> str:
 
 class TestVersionConsistency(unittest.TestCase):
     def test_pyproject_matches_source(self):
-        data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertEqual(data["project"]["version"], _source_version())
+        # tomllib is 3.11+; the CI matrix includes 3.9, so fall back to a regex
+        text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        try:
+            import tomllib
+
+            version = tomllib.loads(text)["project"]["version"]
+        except ModuleNotFoundError:
+            match = re.search(r'^\[project\].*?^version\s*=\s*"([^"]+)"', text, re.MULTILINE | re.DOTALL)
+            self.assertIsNotNone(match, msg="project.version not found")
+            version = match.group(1)
+        self.assertEqual(version, _source_version())
 
     def test_readme_app_version_matches_source(self):
         text = (ROOT / "README.md").read_text(encoding="utf-8")
