@@ -25,12 +25,12 @@
 |--|--|
 | **Organization** | [SquidSec](https://squidoffense.com/) |
 | **Website** | [https://squidoffense.com/](https://squidoffense.com/) |
-| **App version** | **v1.4.2** |
+| **App version** | **v1.5.0** |
 | **Latest binary** | [![GitHub release](https://img.shields.io/github/v/release/DotNetRussell/BloodBash)](https://github.com/DotNetRussell/BloodBash/releases/latest) |
 | **License** | [MIT](LICENSE) |
 | **Runtime (source)** | Python 3.9+ |
 
-Merges to `main` automatically build **Linux** and **Windows** binaries and publish a GitHub Release (tag `v1.4.2-build.N`).
+Merges to `main` automatically build **Linux** and **Windows** binaries and publish a GitHub Release (tag `v1.5.0-build.N`).
 
 ---
 
@@ -646,7 +646,7 @@ pyinstaller --onefile --console --name bloodbash-linux-x64 BloodBash.py
 # -> dist/bloodbash-linux-x64
 ```
 
-CI (on every push to `main`) runs tests, builds Linux + Windows one-file binaries with PyInstaller, and publishes a Release with stable asset names for the `/releases/latest/download/...` links above. Tags look like `v1.4.1-build.N`.
+CI (on every push to `main`) runs tests, builds Linux + Windows one-file binaries with PyInstaller, and publishes a Release with stable asset names for the `/releases/latest/download/...` links above. Tags look like `v1.5.0-build.N`.
 
 ## License & attribution
 
