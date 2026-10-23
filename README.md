@@ -451,6 +451,65 @@ bloodbash ./sharpout --profile adcs-heavy --path-break --busiest-paths short \
 | `--log-file [FILE]` | Append-friendly run log (default `bloodbash.log`) |
 | `--all-findings` | End of run: print a table of **every** finding (even if empty) |
 
+### CI, baselines, and integrations (v1.5)
+
+| Flag | Purpose |
+|------|---------|
+| `--fail-on-severity N` | Exit `2` when any reported finding scores `>= N` (CI gate). Suppressed and baseline-matched rows do not count |
+| `--suppress FILE` | YAML allowlist: `suppressions: [{category, contains, expires}]` |
+| `--baseline REPORT.json` | Diff against a previous `--export json` report; prints new vs resolved and hides known rows |
+| `--export sarif` | SARIF 2.1.0 with ATT&CK taxa (GitHub code scanning, DefectDojo) |
+| `--explain CATEGORY\|N` | Show why a finding fired: rows, ATT&CK id, matching graph edges |
+| `--tickets DIR` | One Markdown ticket per finding at or above `--ticket-min-score` (default 8) |
+| `--graphml FILE` | Graph export for Gephi / yEd |
+| `--snapshot` / `--trend` | Save findings snapshots and compare the latest two |
+| `--plugins-dir DIR` | Load plugin detectors exposing `run(G, add_finding)` |
+| `--watch [DIR]` / `--watch-interval` | Re-run when collector files change |
+
+Every finding category maps to MITRE ATT&CK; the id appears in the findings table, SARIF, tickets, and `--explain`.
+
+```bash
+# CI gate: fail the build on anything 8+
+bloodbash ./sharpout --all --fast --fail-on-severity 8
+
+# Accept known debt, then gate only on regressions
+bloodbash ./sharpout --all --export json            # save as baseline.json
+bloodbash ./sharpout --all --baseline baseline.json --fail-on-severity 8
+
+# Suppressions with an expiry date
+cat > suppressions.yaml <<'YAML'
+suppressions:
+  - category: Kerberoastable
+    contains: SVC_SQL
+    expires: 2026-12-31
+YAML
+
+# Code scanning output
+bloodbash ./sharpout --all --export sarif
+
+# Triage one finding
+bloodbash ./sharpout --all --explain DCSync
+```
+
+### Plugin detectors
+
+```python
+# ./detectors/password_policy.py
+def run(G, add_finding):
+    for _, d in G.nodes(data=True):
+        if (d.get("type") or "").lower() != "user":
+            continue
+        if (d.get("props") or {}).get("minpwdlength") == 0:
+            add_finding("Policy Check", f"{d.get('name')} has no minimum password length", score=6)
+    return 1
+```
+
+```bash
+bloodbash ./sharpout --all --plugins-dir ./detectors
+```
+
+Plugins receive the graph and the same `add_finding(category, details, score)` used internally. A failing plugin is reported and skipped.
+
 ### Other useful flags
 
 | Flag | Purpose |
@@ -535,6 +594,9 @@ python3 -m pytest test_bloodbash.py test_members_ingest.py \
   test_synthetic_corpus.py test_ludus_collections.py \
   test_real_data_reliability.py test_graph_cache.py \
   test_owned_file.py test_golden_path.py test_deep_paths.py \
+  test_repo_hygiene.py \
+  test_ingest_edge_cases.py test_detector_fixes.py \
+  test_reporting_features.py test_coverage_additions.py \
   test_ci_pytest_suite.py -q
 ```
 

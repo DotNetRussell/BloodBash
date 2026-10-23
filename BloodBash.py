@@ -24,6 +24,8 @@ import yaml
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import traceback
+import importlib.util
+import subprocess
 import zipfile
 import hashlib
 import tempfile
@@ -139,6 +141,83 @@ PRIVILEGE_GROUP_KEYWORDS = (
     "dnsadmins", "group policy creator owners", "protected users",
     "enterprise key admins", "key admins@", "cert publishers",
 )
+# ────────────────────────────────────────────────
+# ATT&CK mapping
+# ────────────────────────────────────────────────
+# Finding category -> MITRE ATT&CK technique(s). Kept deliberately small and
+# explicit so reports stay reviewable.
+ATTACK_BY_CATEGORY: Dict[str, List[Dict[str, str]]] = {
+    "DCSync": [{"id": "T1003.006", "name": "OS Credential Dumping: DCSync"}],
+    "Kerberoastable": [{"id": "T1558.003", "name": "Steal or Forge Kerberos Tickets: Kerberoasting"}],
+    "AS-REP Roastable": [{"id": "T1558.004", "name": "Steal or Forge Kerberos Tickets: AS-REP Roasting"}],
+    "Privileged Kerberoastable": [{"id": "T1558.003", "name": "Steal or Forge Kerberos Tickets: Kerberoasting"}],
+    "Privileged AS-REP Roastable": [{"id": "T1558.004", "name": "Steal or Forge Kerberos Tickets: AS-REP Roasting"}],
+    "ESC1-ESC8": [{"id": "T1649", "name": "Steal or Forge Authentication Certificates"}],
+    "Shadow Credentials": [{"id": "T1556.006", "name": "Modify Authentication Process: Multi-Factor Authentication"}],
+    "RBCD": [{"id": "T1550.001", "name": "Use Alternate Authentication Material: Application Access Token"}],
+    "Can Configure RBCD": [{"id": "T1098", "name": "Account Manipulation"}],
+    "Constrained Delegation": [{"id": "T1558", "name": "Steal or Forge Kerberos Tickets"}],
+    "Unconstrained Delegation": [{"id": "T1558", "name": "Steal or Forge Kerberos Tickets"}],
+    "SID History Abuse": [{"id": "T1134.005", "name": "Access Token Manipulation: SID-History Injection"}],
+    "Dangerous Permissions": [{"id": "T1098", "name": "Account Manipulation"}],
+    "Broad Principal ACL": [{"id": "T1098", "name": "Account Manipulation"}],
+    "GPO Abuse": [{"id": "T1484.001", "name": "Domain or Tenant Policy Modification: Group Policy Modification"}],
+    "GPO Content": [{"id": "T1484.001", "name": "Domain or Tenant Policy Modification: Group Policy Modification"}],
+    "Trust Abuse": [{"id": "T1484.002", "name": "Domain or Tenant Policy Modification: Trust Modification"}],
+    "LAPS": [{"id": "T1552.006", "name": "Unsecured Credentials: Group Policy Preferences"}],
+    "LAPS Readers": [{"id": "T1552.006", "name": "Unsecured Credentials: Group Policy Preferences"}],
+    "Password in Description": [{"id": "T1552.001", "name": "Unsecured Credentials: Credentials In Files"}],
+    "Password Never Expires": [{"id": "T1078", "name": "Valid Accounts"}],
+    "Password Not Required": [{"id": "T1078", "name": "Valid Accounts"}],
+    "Password Age": [{"id": "T1110", "name": "Brute Force"}],
+    "Stale Accounts": [{"id": "T1078", "name": "Valid Accounts"}],
+    "Sessions": [{"id": "T1021", "name": "Remote Services"}],
+    "HasSession": [{"id": "T1021", "name": "Remote Services"}],
+    "Shortest Paths": [{"id": "T1021", "name": "Remote Services"}],
+    "Deep Paths": [{"id": "T1021", "name": "Remote Services"}],
+    "Stepping Stones": [{"id": "T1021", "name": "Remote Services"}],
+    "Path Break": [{"id": "T1021", "name": "Remote Services"}],
+    "Owned Paths": [{"id": "T1021", "name": "Remote Services"}],
+    "Arbitrary Paths": [{"id": "T1021", "name": "Remote Services"}],
+    "Azure Privileged Roles": [{"id": "T1098.003", "name": "Account Manipulation: Additional Cloud Roles"}],
+    "Azure App Secrets": [{"id": "T1098.001", "name": "Account Manipulation: Additional Cloud Credentials"}],
+    "Azure MFA Bypass": [{"id": "T1556.006", "name": "Modify Authentication Process: Multi-Factor Authentication"}],
+    "Azure Guest Access": [{"id": "T1078.004", "name": "Valid Accounts: Cloud Accounts"}],
+    "Azure Service Principal Abuse": [{"id": "T1098.001", "name": "Account Manipulation: Additional Cloud Credentials"}],
+}
+
+
+def attack_techniques_for(category: str) -> List[Dict[str, str]]:
+    """ATT&CK techniques for a finding category (empty list when unmapped)."""
+    return list(ATTACK_BY_CATEGORY.get(category or "", []))
+
+
+def format_attack_ids(category: str) -> str:
+    return ", ".join(t["id"] for t in attack_techniques_for(category))
+
+
+def _attack_taxonomy() -> Dict[str, Dict[str, str]]:
+    """Technique id -> name, deduped, for SARIF taxonomy entries."""
+    taxa: Dict[str, Dict[str, str]] = {}
+    for techniques in ATTACK_BY_CATEGORY.values():
+        for tech in techniques:
+            taxa.setdefault(tech["id"], tech)
+    return taxa
+
+
+# Security score -> SARIF level. 9+ is critical, 7-8 error, 5-6 warning, rest note.
+def sarif_level_for(score: int) -> str:
+    try:
+        s = int(score)
+    except (TypeError, ValueError):
+        return "note"
+    if s >= 8:
+        return "error"
+    if s >= 5:
+        return "warning"
+    return "note"
+
+
 global_findings = []
 def add_finding(category, details, score=None):
     if score is None:
@@ -186,22 +265,24 @@ def collapse_findings(
     return sorted(out, key=lambda x: x[0], reverse=True)
 
 
-def print_prioritized_findings(show_all=False):
+def print_prioritized_findings(show_all=False, findings: Optional[Sequence[Tuple[int, str, str]]] = None):
     """
     Print findings summary table at end of run.
 
     Default: collapsed high-volume categories, top 20 by severity (skipped when empty).
     show_all / --all-findings: collapsed list of every remaining row after collapse,
     including an empty-state row when nothing was recorded.
+    ``findings`` overrides the global list (suppression / baseline filtered views).
     """
-    raw_total = len(global_findings)
-    sorted_findings = collapse_findings(global_findings)
+    src = list(findings if findings is not None else global_findings)
+    raw_total = len(src)
+    sorted_findings = collapse_findings(src)
     if show_all:
         console.rule("[bold magenta]All Findings by Severity[/bold magenta]")
         title = f"All Findings · {__org__} ({len(sorted_findings)})"
         rows = sorted_findings
     else:
-        if not global_findings:
+        if not src:
             return
         console.rule("[bold magenta]Prioritized Findings by Severity[/bold magenta]")
         title = f"Findings Summary · {__org__}"
@@ -214,12 +295,13 @@ def print_prioritized_findings(show_all=False):
     table.add_column("#", style="dim", justify="right")
     table.add_column("Severity Score", style="red", justify="right")
     table.add_column("Category", style="cyan")
+    table.add_column("ATT&CK", style="magenta", overflow="fold")
     table.add_column("Details", style="yellow", overflow="fold")
     if not rows:
-        table.add_row("—", "—", "(none)", "No findings recorded")
+        table.add_row("—", "—", "(none)", "—", "No findings recorded")
     else:
         for i, (score, cat, det) in enumerate(rows, 1):
-            table.add_row(str(i), str(score), cat, det)
+            table.add_row(str(i), str(score), cat, format_attack_ids(cat) or "—", det)
     console.print(table)
     if raw_total != len(sorted_findings):
         console.print(
@@ -3409,17 +3491,44 @@ def print_gpo_content_analysis(G, gpo_content_dir: str, domain_filter=None):
         try:
             tree = ET.parse(xml_path)
             root = tree.getroot()
-            gpo_name_elem = root.find(".//GPO/Name") or root.find(".//Name")
-            gpo_name = (gpo_name_elem.text or Path(xml_path).stem).strip().upper() if gpo_name_elem is not None else Path(xml_path).stem.upper()
-            for task in root.findall(".//ScheduledTasks/Task"):
+            # Element truthiness is always True (and a DeprecationWarning), so
+            # `find(...) or find(...)` picked the first node found even when it
+            # was a task name rather than the GPO name.
+            gpo_name_elem = root.find(".//GPO/Name")
+            if gpo_name_elem is None and (root.tag or "").lower() == "gpo":
+                gpo_name_elem = root.find("Name")
+            if gpo_name_elem is None:
+                gpo_name_elem = root.find(".//Name")
+            gpo_name = (
+                (gpo_name_elem.text or Path(xml_path).stem).strip().upper()
+                if gpo_name_elem is not None
+                else Path(xml_path).stem.upper()
+            )
+            # Accept both <GPO><ScheduledTasks> and a bare <ScheduledTasks> root
+            if (root.tag or "").lower() == "scheduledtasks":
+                tasks = root.findall("Task")
+            else:
+                tasks = root.findall(".//ScheduledTasks/Task")
+            for task in tasks:
                 name = task.findtext("Name") or "UnnamedTask"
                 command = task.findtext("Command") or ""
                 arguments = task.findtext("Arguments") or ""
+                # Trigger context matters: logon/boot triggers run for every user
+                triggers = [
+                    (t.get("type") or t.tag or t.findtext("Type") or "").strip()
+                    for t in task.findall(".//Triggers/*")
+                ]
+                triggers = [t for t in triggers if t]
+                # Trigger names are data; bracket-escape so Rich cannot eat [logon]
+                if triggers:
+                    trigger_note = " [\\[" + ", ".join(triggers[:3]) + "]"
+                else:
+                    trigger_note = ""
                 if command or arguments:
                     found_exploitable = True
-                    console.print(f"[yellow]Exploitable Scheduled Task[/yellow] in [bold cyan]{gpo_name}[/bold cyan]: {name}")
+                    console.print(f"[yellow]Exploitable Scheduled Task[/yellow] in [bold cyan]{gpo_name}[/bold cyan]: {name}{trigger_note}")
                     console.print(f"   → Command: [green]{command} {arguments}[/green]")
-                    add_finding("GPO Content", f"Scheduled Task '{name}' in {gpo_name}", score=8)
+                    add_finding("GPO Content", f"Scheduled Task '{name}' in {gpo_name}{trigger_note}", score=8)
             for script in root.findall(".//Scripts/Script"):
                 cmd = script.findtext("Command") or ""
                 if cmd:
@@ -3430,6 +3539,33 @@ def print_gpo_content_analysis(G, gpo_content_dir: str, domain_filter=None):
                 found_exploitable = True
                 console.print(f"[red]GPP cPassword found![/red] in [bold cyan]{gpo_name}[/bold cyan] → decrypt with gpp-decrypt")
                 add_finding("GPO Content", f"GPP cPassword in {gpo_name}", score=10)
+            # Local group membership changes planted through Preferences/Groups
+            groups = (
+                root.findall("Group")
+                if (root.tag or "").lower() == "groups"
+                else root.findall(".//Groups/Group")
+            )
+            for group in groups:
+                gname = (group.findtext("Properties/groupName") or group.get("name") or "").strip()
+                if not gname:
+                    continue
+                members = [
+                    (m.get("name") or m.text or "").strip()
+                    for m in group.findall(".//Members/Member")
+                ]
+                members = [m for m in members if m]
+                if not members:
+                    continue
+                found_exploitable = True
+                console.print(
+                    f"[yellow]GPO local group change[/yellow] in [bold cyan]{gpo_name}[/bold cyan]: "
+                    f"{gname} ← {', '.join(members[:5])}"
+                )
+                add_finding(
+                    "GPO Content",
+                    f"GPO adds {', '.join(members[:5])} to local group {gname} in {gpo_name}",
+                    score=8,
+                )
         except ET.ParseError as e:
             console.print(f"[yellow]Warning: Could not parse {xml_path}: {e}[/yellow]")
         except Exception as e:
@@ -4225,6 +4361,63 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
                 score=7,
             )
 
+        # ── ESC10/ESC11/ESC12: require CA/registry data when the collector has it ──
+        # ESC10: weak certificate mapping fallback on the CA
+        if obj_type == 'enterprise ca':
+            weak_mapping = get_bool_prop_ci(
+                props,
+                [
+                    'certificatemappingmethod', 'CertificateMappingMethod',
+                    'strongcertificatebindingenforcement', 'StrongCertificateBindingEnforcement',
+                ],
+            )
+            mapping_text = str(
+                _prop_raw_ci(props, [
+                    'certificatemappingmethod', 'CertificateMappingMethod',
+                    'strongcertificatebindingenforcement', 'StrongCertificateBindingEnforcement',
+                ]) or ''
+            ).lower()
+            if 'weak' in mapping_text:
+                found = True
+                console.print(
+                    f"[red]ESC10[/red]: [bold cyan]{name}[/bold cyan] "
+                    f"(weak certificate mapping / KB5014754 compatibility mode)"
+                )
+                add_finding("ESC1-ESC8", f"ESC10 on {name}", score=9)
+            # ESC11: CA RPC interface without encryption
+            ifd = _prop_raw_ci(
+                props,
+                ['interfaceflagnoencryption', 'InterfaceFlagNoEncryption',
+                 'ifencryptionrequired', 'IfEncryptionRequired'],
+            )
+            if ifd is not None:
+                if isinstance(ifd, str):
+                    no_encryption = 'no_encryption' in ifd.lower().replace(' ', '_')
+                else:
+                    no_encryption = not bool(ifd) if isinstance(ifd, bool) else bool(int(ifd) & 0x1)
+                # IfEncryptionRequired=false is the exposure
+                raw_bool = get_bool_prop_ci(
+                    props, ['ifencryptionrequired', 'IfEncryptionRequired'], default=True
+                )
+                if no_encryption or raw_bool is False:
+                    found = True
+                    console.print(
+                        f"[red]ESC11[/red]: [bold cyan]{name}[/bold cyan] "
+                        f"(CA ICPR RPC allows unencrypted requests)"
+                    )
+                    add_finding("ESC1-ESC8", f"ESC11 on {name}", score=9)
+            # ESC12: CA private key exportable on a software-backed CA
+            exportable = get_bool_prop_ci(
+                props, ['capexportablekey', 'CAExportableKey', 'exportablekey']
+            )
+            if exportable:
+                found = True
+                console.print(
+                    f"[red]ESC12[/red]: [bold cyan]{name}[/bold cyan] "
+                    f"(CA private key exportable; software KSP)"
+                )
+                add_finding("ESC1-ESC8", f"ESC12 on {name}", score=9)
+
         # ── ESC14 hint: NO_SECURITY_EXTENSION + UPN/DNS SAN without strong mapping data ──
         if (
             obj_type == 'certificate template'
@@ -4242,8 +4435,9 @@ def print_adcs_vulnerabilities(G, domain_filter=None):
     if found:
         print_abuse_panel("ESC1-ESC8 (AD CS)")
         console.print(
-            "[dim]Note: ESC6/ESC8/ESC10–12 often need CA registry or HTTP role data "
-            "not present in all SharpHound collections. ESC9 uses NO_SECURITY_EXTENSION.[/dim]"
+            "[dim]Note: ESC6/ESC8/ESC10–12 require CA registry or HTTP role data. "
+            "BloodBash reports them only when the collection carries those properties. "
+            "ESC9 uses NO_SECURITY_EXTENSION.[/dim]"
         )
     else:
         if not _QUIET_EMPTY_SECTIONS:
@@ -7670,6 +7864,103 @@ def print_azure_guest_access(G, domain_filter=None):
     else:
         console.print("[green]No Azure guest users with elevated access detected[/green]")
 
+def print_azure_consent_and_pim(G, domain_filter=None):
+    """Entra consent grants, standing privileged assignments, and unmanaged devices.
+
+    Uses only properties AzureHound exports; absence of data is reported as
+    unknown rather than clean.
+    """
+    sec = DeferredSection("Azure / Entra Consent, PIM, and Device Posture")
+    found = False
+    privileged = (
+        "global administrator", "privileged role administrator", "user administrator",
+        "application administrator", "cloud application administrator",
+        "exchange administrator", "sharepoint administrator", "security administrator",
+    )
+    standing = 0
+    for n, d in G.nodes(data=True):
+        if not d.get("is_azure") or not _domain_matches(d, domain_filter):
+            continue
+        typ = str(d.get("type") or "").lower()
+        props = d.get("props") or {}
+        # Standing (permanent) privileged role assignments vs PIM-eligible
+        if typ == "azure role" and any(p in (d.get("name") or "").lower() for p in privileged):
+            for u, _, ed in G.in_edges(n, data=True):
+                label = (ed or {}).get("label") or ""
+                if label.lower() not in ("hasrole", "memberof"):
+                    continue
+                assignment = str(
+                    _prop_raw_ci(props, ["assignmenttype", "AssignmentType"]) or ""
+                ).lower()
+                if assignment in ("eligible", "pim"):
+                    continue
+                standing += 1
+                found = True
+                sec.mark()
+                console.print(
+                    f"  [red]Standing privileged role[/red]: "
+                    f"[green]{G.nodes[u].get('name', u)}[/green] -> [cyan]{d.get('name')}[/cyan]"
+                )
+                add_finding(
+                    "Azure Privileged Roles",
+                    f"Standing assignment: {G.nodes[u].get('name', u)} holds {d.get('name')}",
+                    score=9,
+                )
+        # OAuth permission grants to service principals
+        grants = _prop_raw_ci(
+            props, ["oauth2permissiongrants", "OAuth2PermissionGrants", "consentgrants"]
+        )
+        if typ == "azure service principal" and grants:
+            entries = grants if isinstance(grants, list) else [grants]
+            scopes = []
+            for entry in entries:
+                if isinstance(entry, dict):
+                    scope = entry.get("scope") or entry.get("Scope") or ""
+                    if scope:
+                        scopes.extend(str(scope).split())
+            risky = [s for s in scopes if "ReadWrite" in s or s in ("Directory.AccessAsUser.All", "Mail.ReadWrite")]
+            if risky:
+                found = True
+                sec.mark()
+                console.print(
+                    f"  [yellow]Broad consent grant[/yellow]: [cyan]{d.get('name')}[/cyan] "
+                    f"scopes {', '.join(sorted(set(risky))[:5])}"
+                )
+                add_finding(
+                    "Azure Service Principal Abuse",
+                    f"{d.get('name')} has write-capable consent scopes: "
+                    f"{', '.join(sorted(set(risky))[:5])}",
+                    score=8,
+                )
+        # Devices that are not Entra-joined / compliant (unmanaged)
+        if typ == "azure device":
+            managed = _prop_raw_ci(
+                props, ["iscompliance", "isCompliant", "isManaged", "isManagedDevice"]
+            )
+            if managed is not None and not get_bool_prop_ci(
+                props, ["iscompliance", "isCompliant", "isManaged", "isManagedDevice"], default=True
+            ):
+                found = True
+                sec.mark()
+                console.print(
+                    f"  [yellow]Unmanaged device[/yellow]: [cyan]{d.get('name')}[/cyan]"
+                )
+                add_finding(
+                    "Azure Guest Access",
+                    f"Unmanaged/uncompliant device in tenant: {d.get('name')}",
+                    score=6,
+                )
+    if found:
+        console.print(
+            f"[dim]{standing} standing privileged assignment(s); prefer PIM eligibility.[/dim]"
+        )
+    else:
+        sec.empty(
+            "No standing privileged assignments, broad consent grants, or "
+            "unmanaged devices found (absence of properties is not a clean bill)"
+        )
+
+
 def print_azure_service_principal_abuse(G, domain_filter=None):
     console.rule("[bold magenta]Azure Service Principal Abuse Risks[/bold magenta]")
     found = False
@@ -10767,6 +11058,8 @@ def build_export_report(G, domain_filter=None):
     }
 
 def export_results(G, output_prefix="bloodbash", format_type="md", domain_filter=None):
+    if format_type == "sarif":
+        return export_sarif(G, f"{output_prefix}.sarif", domain_filter=domain_filter)
     report = build_export_report(G, domain_filter)
     if format_type == "md":
         path = f"{output_prefix}.md"
@@ -10850,6 +11143,620 @@ def export_bloodhound_compatible(G, output_prefix="bloodbash_bh"):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(bh_data, f, indent=2)
     console.print(f"[green]Exported BloodHound-compatible JSON:[/green] {path}")
+
+def _watch_signature(paths: Sequence[str]) -> str:
+    """Fingerprint of collector inputs used to detect new/changed collections."""
+    try:
+        return compute_collection_fingerprint(paths)
+    except OSError:
+        return ""
+
+
+def _watch_argv(argv: Sequence[str]) -> List[str]:
+    """Child argv for --watch runs: drop the watch flags to avoid recursion."""
+    out: List[str] = []
+    skip_next = False
+    for i, token in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
+        if token == "--watch":
+            # --watch takes an optional value; next token is a value only if not a flag
+            if i + 1 < len(argv) and not str(argv[i + 1]).startswith("-"):
+                skip_next = True
+            continue
+        if token in ("--watch-interval",):
+            skip_next = True
+            continue
+        if token.startswith("--watch-interval="):
+            continue
+        out.append(token)
+    return out
+
+
+def run_watch_mode(
+    paths: Sequence[str],
+    *,
+    interval: float = 5.0,
+    run_once=None,
+    max_cycles: Optional[int] = None,
+    sleep_fn=None,
+) -> int:
+    """
+    Poll collector inputs and re-run analysis when they change.
+
+    ``run_once`` is injected for testability; production passes the analysis
+    entry point. Returns the number of completed cycles.
+    """
+    sleep_fn = sleep_fn or time.sleep
+    last = _watch_signature(paths)
+    cycles = 0
+    polls = 0
+    console.print(
+        f"[cyan]Watching[/cyan] {', '.join(str(p) for p in paths)} "
+        f"every {interval:g}s (Ctrl-C to stop)"
+    )
+    if run_once is not None:
+        run_once()
+        cycles += 1
+    # max_cycles bounds the number of analysis runs; polls bound the wait so an
+    # unchanged collection cannot loop forever in non-interactive callers.
+    max_polls = None if max_cycles is None else max(max_cycles * 10, 50)
+    while max_cycles is None or cycles < max_cycles:
+        if max_polls is not None and polls >= max_polls:
+            break
+        polls += 1
+        sleep_fn(interval)
+        current = _watch_signature(paths)
+        if current and current != last:
+            last = current
+            console.print("[green]Collection changed[/green]: re-running analysis")
+            if run_once is not None:
+                run_once()
+            cycles += 1
+    return cycles
+
+
+# ────────────────────────────────────────────────
+# Suppressions, baselines, SARIF, gates, explain
+# ────────────────────────────────────────────────
+class SuppressionSet:
+    """
+    Deterministic allowlist of accepted findings.
+
+    Each entry may filter by ``category`` (exact), ``contains`` (substring in
+    details), and ``expires`` (ISO date; expired entries stop applying).
+    """
+
+    def __init__(self, entries: Optional[Sequence[dict]] = None, source: str = ""):
+        self.entries = [e for e in (entries or []) if isinstance(e, dict)]
+        self.source = source
+        self._today = date.today()
+
+    def __len__(self) -> int:
+        return len(self.entries)
+
+    def _active(self, entry: dict) -> bool:
+        raw = entry.get("expires") or entry.get("expiry")
+        if not raw:
+            return True
+        try:
+            if isinstance(raw, str):
+                exp = date.fromisoformat(raw.strip()[:10])
+            else:
+                exp = raw
+            return exp >= self._today
+        except (ValueError, TypeError):
+            # Unparseable expiry must not silently disable a suppression
+            return False
+
+    def is_suppressed(self, category: str, details: str) -> bool:
+        cat = (category or "").strip().lower()
+        det = (details or "").lower()
+        for entry in self.entries:
+            if not self._active(entry):
+                continue
+            entry_cat = str(entry.get("category") or entry.get("rule") or "").strip().lower()
+            needle = str(entry.get("contains") or entry.get("match") or "").strip().lower()
+            if entry_cat and entry_cat != cat:
+                continue
+            if needle and needle not in det:
+                continue
+            if entry_cat or needle:
+                return True
+        return False
+
+    @classmethod
+    def from_baseline(cls, path: str) -> "SuppressionSet":
+        """Treat every finding in a previous report as accepted."""
+        report = _load_baseline_report(path)
+        entries = [
+            {"category": f.get("category"), "contains": f.get("details")}
+            for f in report.get("findings_raw") or report.get("findings") or []
+            if isinstance(f, dict)
+        ]
+        return cls(entries=entries, source=path)
+
+
+def load_suppressions(path: Optional[str]) -> SuppressionSet:
+    """Load a YAML suppression file: ``suppressions: [{category, contains, expires}]``."""
+    if not path:
+        return SuppressionSet()
+    p = Path(path).expanduser()
+    if not p.is_file():
+        raise FileNotFoundError(f"Suppression file not found: {path}")
+    with open(p, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    if isinstance(data, list):
+        entries = data
+    elif isinstance(data, dict):
+        entries = data.get("suppressions") or data.get("entries") or []
+    else:
+        entries = []
+    if not isinstance(entries, list):
+        raise ValueError("suppressions must be a list of mapping entries")
+    return SuppressionSet(entries=entries, source=str(p))
+
+
+def apply_suppressions(
+    findings: Optional[Sequence[Tuple[int, str, str]]] = None,
+    suppressions: Optional[SuppressionSet] = None,
+) -> List[Tuple[int, str, str]]:
+    src = list(findings if findings is not None else global_findings)
+    if not suppressions or not len(suppressions):
+        return src
+    return [f for f in src if not suppressions.is_suppressed(f[1], f[2])]
+
+
+def _load_baseline_report(path: str) -> dict:
+    p = Path(path).expanduser()
+    if not p.is_file():
+        raise OSError(f"Baseline report not found: {path}")
+    with open(p, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"Baseline is not a BloodBash JSON report: {path}")
+    return data
+
+
+def _finding_key(finding: dict) -> Tuple[str, str]:
+    return (str(finding.get("category") or ""), str(finding.get("details") or ""))
+
+
+def diff_findings_against_baseline(
+    baseline_path: str,
+    findings: Optional[Sequence[Tuple[int, str, str]]] = None,
+) -> dict:
+    """Compare current findings with a previous JSON report."""
+    report = _load_baseline_report(baseline_path)
+    baseline_rows = report.get("findings_raw") or report.get("findings") or []
+    baseline = {}
+    for row in baseline_rows:
+        if isinstance(row, dict):
+            baseline[_finding_key(row)] = row
+    current = {}
+    for score, cat, det in (findings if findings is not None else global_findings):
+        current[(cat, det)] = {"score": score, "category": cat, "details": det}
+
+    new = [current[k] for k in current.keys() - baseline.keys()]
+    resolved = [baseline[k] for k in baseline.keys() - current.keys()]
+    new.sort(key=lambda f: -int(f.get("score") or 0))
+    resolved.sort(key=lambda f: -int(f.get("score") or 0))
+    return {
+        "baseline": str(baseline_path),
+        "new": new,
+        "resolved": resolved,
+        "unchanged": bool(current.keys() & baseline.keys()),
+        "new_count": len(new),
+        "resolved_count": len(resolved),
+    }
+
+
+def print_baseline_diff(diff: dict, limit: int = 20) -> None:
+    console.rule("[bold magenta]Baseline diff (new vs previous report)[/bold magenta]")
+    console.print(f"[dim]Baseline: {diff.get('baseline')}[/dim]")
+    new = diff.get("new") or []
+    resolved = diff.get("resolved") or []
+    console.print(
+        f"  [red]{len(new)} new[/red] · [green]{len(resolved)} resolved[/green]"
+    )
+    for row in new[:limit]:
+        console.print(
+            f"  [red]+[/red] [{row.get('score')}] {row.get('category')}: {row.get('details')}"
+        )
+    for row in resolved[:limit]:
+        console.print(
+            f"  [green]-[/green] [{row.get('score')}] {row.get('category')}: {row.get('details')}"
+        )
+
+
+def evaluate_findings_gate(
+    threshold: Optional[int],
+    findings: Optional[Sequence[Tuple[int, str, str]]] = None,
+    suppressions: Optional[SuppressionSet] = None,
+) -> int:
+    """Exit code for ``--fail-on-severity``: 2 when a finding meets the threshold."""
+    if threshold is None:
+        return 0
+    rows = apply_suppressions(findings, suppressions)
+    try:
+        limit = int(threshold)
+    except (TypeError, ValueError):
+        return 0
+    for score, _cat, _det in rows:
+        if int(score) >= limit:
+            return 2
+    return 0
+
+
+def export_sarif(
+    G,
+    path: str,
+    findings: Optional[Sequence[Tuple[int, str, str]]] = None,
+    suppressions: Optional[SuppressionSet] = None,
+    domain_filter=None,
+    artifact_uri: str = "bloodbash://collection",
+) -> str:
+    """Write SARIF 2.1.0 with ATT&CK taxa for code scanning / DefectDojo."""
+    rows = list(findings if findings is not None else global_findings)
+    rows.sort(key=lambda x: -int(x[0]))
+    rules: Dict[str, dict] = {}
+    results: List[dict] = []
+    for score, cat, det in rows:
+        rule_id = f"BloodBash/{cat}"
+        if rule_id not in rules:
+            attack = attack_techniques_for(cat)
+            rule = {
+                "id": rule_id,
+                "name": cat.replace(" ", ""),
+                "shortDescription": {"text": cat},
+                "properties": {
+                    "tags": ["security", "active-directory"] + [t["id"] for t in attack],
+                    "security-severity": str(score),
+                },
+            }
+            if attack:
+                rule["relationships"] = [
+                    {
+                        "target": {
+                            "id": t["id"],
+                            "toolComponent": {"name": "ATT&CK"},
+                        }
+                    }
+                    for t in attack
+                ]
+            rules[rule_id] = rule
+        suppressed = bool(suppressions and suppressions.is_suppressed(cat, det))
+        result = {
+            "ruleId": rule_id,
+            "level": sarif_level_for(score),
+            "message": {"text": str(det)},
+            "properties": {
+                "severityScore": int(score),
+                "attack": [t["id"] for t in attack_techniques_for(cat)],
+            },
+            "locations": [
+                {
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": artifact_uri},
+                        "region": {"startLine": 1},
+                    },
+                    "logicalLocations": [{"name": str(det)[:120]}],
+                }
+            ],
+        }
+        if suppressed:
+            result["suppressions"] = [
+                {"kind": "external", "justification": "listed in suppression file"}
+            ]
+        results.append(result)
+
+    run: Dict[str, Any] = {
+        "tool": {
+            "driver": {
+                "name": "BloodBash",
+                "version": __version__,
+                "informationUri": __project_url__,
+                "organization": __org__,
+                "rules": sorted(rules.values(), key=lambda r: r["id"]),
+            }
+        },
+        "columnKind": "utf16CodeUnits",
+        "results": results,
+    }
+    taxa = _attack_taxonomy()
+    if taxa:
+        run["taxonomies"] = [
+            {
+                "name": "ATT&CK",
+                "organization": "MITRE",
+                "informationUri": "https://attack.mitre.org/",
+                "taxa": [
+                    {"id": tid, "name": info["name"], "shortDescription": {"text": info["name"]}}
+                    for tid, info in sorted(taxa.items())
+                ],
+            }
+        ]
+    doc = {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [run],
+    }
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(doc, f, indent=2)
+    console.print(f"[green]Exported SARIF:[/green] {path} ({len(results)} result(s))")
+    return path
+
+
+def explain_finding(identifier: str, G=None) -> None:
+    """
+    Explain one finding by index (as printed) or by category.
+
+    Shows contributing rows, ATT&CK mapping, and the matching graph edges so a
+    reviewer can confirm the rule fired for the right reason.
+    """
+    rows = collapse_findings(global_findings)
+    ident = (identifier or "").strip()
+    matched: List[Tuple[int, str, str]] = []
+    if ident.isdigit():
+        idx = int(ident)
+        if 1 <= idx <= len(rows):
+            matched = [rows[idx - 1]]
+    if not matched:
+        low = ident.lower()
+        matched = [r for r in rows if r[1].lower() == low]
+        if not matched:
+            matched = [r for r in rows if low and low in r[2].lower()]
+    if not matched:
+        console.print(f"[yellow]No finding matches {identifier!r}[/yellow]")
+        return
+    cat = matched[0][1]
+    all_rows = [f for f in global_findings if f[1] == cat]
+    console.rule(f"[bold magenta]Explain: {cat}[/bold magenta]")
+    console.print(f"  Rows: [red]{len(all_rows)}[/red] (raw, pre-collapse)")
+    for tech in attack_techniques_for(cat):
+        console.print(f"  ATT&CK: [magenta]{tech['id']}[/magenta] {tech['name']}")
+    for score, _c, det in all_rows[:10]:
+        console.print(f"  • [{score}] {det}")
+    if len(all_rows) > 10:
+        console.print(f"  [dim]... and {len(all_rows) - 10} more[/dim]")
+    if G is not None and len(G):
+        samples = [r[2] for r in all_rows[:3]]
+        names = set()
+        for det in samples:
+            for node, d in G.nodes(data=True):
+                node_name = d.get("name") or ""
+                if node_name and node_name in det:
+                    names.add(node)
+        if names:
+            console.print("[dim]Edges touching the first examples:[/dim]")
+            shown = 0
+            for node in sorted(names):
+                for u, v, ed in G.out_edges(node, data=True):
+                    console.print(
+                        f"  {G.nodes[u].get('name', u)} --[{(ed or {}).get('label')}]--> "
+                        f"{G.nodes[v].get('name', v)}"
+                    )
+                    shown += 1
+                    if shown >= 15:
+                        break
+                if shown >= 15:
+                    break
+
+
+def export_graphml(G, path: str, domain_filter=None) -> str:
+    """Export the graph for Gephi/yEd; list/dict props are JSON-encoded."""
+    H = nx.MultiDiGraph()
+    keep = set()
+    for n, d in G.nodes(data=True):
+        if not _domain_matches(d, domain_filter):
+            continue
+        keep.add(n)
+        props = d.get("props") or {}
+        H.add_node(
+            n,
+            name=str(d.get("name") or n),
+            type=str(d.get("type") or "Unknown"),
+            is_azure=bool(d.get("is_azure")),
+            props=json.dumps(props, default=str) if isinstance(props, dict) else str(props),
+        )
+    for u, v, d in G.edges(data=True):
+        if u in keep and v in keep:
+            H.add_edge(u, v, label=str((d or {}).get("label") or ""))
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    nx.write_graphml(H, path)
+    console.print(f"[green]Exported GraphML:[/green] {path}")
+    return path
+
+
+TICKET_REMEDIATION = {
+    "DCSync": "Remove DS-Replication-Get-Changes / -All from non-tier-0 principals.",
+    "Kerberoastable": "Move service accounts to gMSAs, rotate passwords, enforce 25+ chars.",
+    "AS-REP Roastable": "Require Kerberos pre-authentication on affected accounts.",
+    "ESC1-ESC8": "Remove EnrolleeSuppliesSubject / dangerous ACLs; enforce manager approval.",
+    "Shadow Credentials": "Remove AddKeyCredentialLink rights outside Key Admins.",
+    "RBCD": "Clear msDS-AllowedToActOnBehalfOfOtherIdentity on affected computers.",
+    "Can Configure RBCD": "Remove WriteAccountRestrictions/GenericAll on computer objects.",
+    "GPO Abuse": "Restrict GPO write rights to tier-0 change control groups.",
+    "Trust Abuse": "Enable SID filtering; review forest trust design.",
+    "LAPS": "Enable LAPS on all computers; restrict ReadLAPSPassword to helpdesk.",
+    "LAPS Readers": "Narrow ReadLAPSPassword to a single tiered admin group.",
+    "Azure Privileged Roles": "Remove standing Global Admin; require PIM eligibility.",
+    "Azure App Secrets": "Move to workload identity federation; limit credential owners.",
+    "Azure MFA Bypass": "Enforce MFA via conditional access for affected users.",
+}
+
+
+def export_tickets(G, export_dir: str, min_score: int = 8) -> List[str]:
+    """One Markdown ticket per finding at or above ``min_score``."""
+    export_dir = os.path.abspath(export_dir)
+    os.makedirs(export_dir, exist_ok=True)
+    written: List[str] = []
+    rows = sorted(collapse_findings(global_findings), key=lambda x: -int(x[0]))
+    used = set()
+    for score, cat, det in rows:
+        if int(score) < int(min_score):
+            continue
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", f"{cat}-{det}"[:80]).strip("-._") or "finding"
+        if slug in used:
+            continue
+        used.add(slug)
+        path = os.path.join(export_dir, f"{slug}.md")
+        techniques = attack_techniques_for(cat)
+        lines = [
+            f"# [{score}] {cat}",
+            "",
+            f"**Severity:** {score}",
+            f"**ATT&CK:** " + (", ".join(f"{t['id']} ({t['name']})" for t in techniques) or "n/a"),
+            "",
+            "## Detail",
+            "",
+            det,
+            "",
+            "## Remediation",
+            "",
+            TICKET_REMEDIATION.get(cat, "Review the affected object and remove the unnecessary right."),
+            "",
+            f"_Generated by BloodBash v{__version__} ({__org__})._",
+            "",
+        ]
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        written.append(path)
+    console.print(f"[green]Exported tickets:[/green] {export_dir} ({len(written)} file(s))")
+    return written
+
+
+def default_snapshot_dir() -> Path:
+    return default_graph_cache_dir() / "snapshots"
+
+
+def save_findings_snapshot(G, cache_dir: Optional[str] = None, label: str = "") -> str:
+    """Store a compact, timestamped findings snapshot for trend comparison."""
+    base = Path(cache_dir).expanduser() if cache_dir else default_snapshot_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    safe_label = re.sub(r"[^A-Za-z0-9._-]+", "-", label or "run").strip("-") or "run"
+    path = base / f"{stamp}-{safe_label}.json"
+    payload = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "label": label,
+        "version": __version__,
+        "nodes": G.number_of_nodes() if G is not None else 0,
+        "edges": G.number_of_edges() if G is not None else 0,
+        "findings": [
+            {"score": s, "category": c, "details": d}
+            for s, c, d in sorted(global_findings, key=lambda x: -int(x[0]))
+        ],
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    console.print(f"[green]Findings snapshot:[/green] {path}")
+    return str(path)
+
+
+def list_snapshots(cache_dir: Optional[str] = None) -> List[dict]:
+    base = Path(cache_dir).expanduser() if cache_dir else default_snapshot_dir()
+    if not base.is_dir():
+        return []
+    out = []
+    for p in sorted(base.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        out.append(
+            {
+                "path": str(p),
+                "label": data.get("label") or "",
+                "created_at": data.get("created_at") or "",
+                "findings": len(data.get("findings") or []),
+            }
+        )
+    return out
+
+
+def compare_latest_two_snapshots(cache_dir: Optional[str] = None) -> Optional[dict]:
+    snaps = list_snapshots(cache_dir)
+    if len(snaps) < 2:
+        return None
+    prev, cur = snaps[-2], snaps[-1]
+    try:
+        old = json.loads(Path(prev["path"]).read_text(encoding="utf-8"))
+        new = json.loads(Path(cur["path"]).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    old_keys = {(f.get("category"), f.get("details")) for f in old.get("findings") or []}
+    new_keys = {(f.get("category"), f.get("details")) for f in new.get("findings") or []}
+    return {
+        "previous": prev,
+        "current": cur,
+        "new": sorted(new_keys - old_keys),
+        "resolved": sorted(old_keys - new_keys),
+    }
+
+
+# ────────────────────────────────────────────────
+# Plugin detectors
+# ────────────────────────────────────────────────
+PLUGIN_DETECTOR_TEMPLATE = '''"""BloodBash plugin detector.
+
+Each module exposes ``run(G, add_finding)``. Add findings with:
+    add_finding("My Category", "detail text", score=7)
+"""
+'''
+
+
+def load_plugin_detectors(directory: Optional[str]) -> List[dict]:
+    """Load ``*.py`` detectors exposing ``run(G, add_finding)`` from a directory."""
+    if not directory:
+        return []
+    base = Path(directory).expanduser()
+    if not base.is_dir():
+        raise FileNotFoundError(f"Plugin directory not found: {directory}")
+    loaded: List[dict] = []
+    for path in sorted(base.glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+        spec = importlib.util.spec_from_file_location(f"bloodbash_plugin_{path.stem}", path)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except Exception as exc:  # plugin code is untrusted input
+            console.print(f"[yellow]Skipping plugin {path.name}: {exc}[/yellow]")
+            continue
+        run_fn = getattr(module, "run", None)
+        if not callable(run_fn):
+            console.print(f"[yellow]Skipping plugin {path.name}: no run(G, add_finding)[/yellow]")
+            continue
+        loaded.append({"name": path.stem, "path": str(path), "run": run_fn})
+    return loaded
+
+
+def run_plugin_detectors(detectors: Sequence[dict], G) -> int:
+    """Run plugin detectors, isolating failures so one plugin cannot abort a run."""
+    total = 0
+    for det in detectors:
+        try:
+            result = det["run"](G, add_finding)
+            if isinstance(result, int):
+                total += result
+        except Exception as exc:
+            console.print(f"[yellow]Plugin {det.get('name')} failed: {exc}[/yellow]")
+    if detectors:
+        console.print(
+            f"[green]Plugins:[/green] ran {len(detectors)} detector(s), "
+            f"{total} finding(s) reported"
+        )
+    return total
+
 
 def _dot_escape(value: Any) -> str:
     """Escape a Graphviz quoted-string body (backslash, quotes, newlines)."""
@@ -10995,7 +11902,16 @@ HELP_TABLE_SECTIONS = [
     (
         "Export & deliverables",
         [
-            ("--export [fmt]", "Write findings report", "md|json|html|csv|yaml (default md)"),
+            ("--export [fmt]", "Write findings report", "md|json|html|csv|yaml|sarif (default md)"),
+            ("--fail-on-severity N", "Exit 2 when any finding scores >= N", "CI gate"),
+            ("--baseline REPORT.json", "Diff vs a previous --export json report", "new vs resolved"),
+            ("--suppress FILE", "YAML suppressions with optional expiry", "category / contains"),
+            ("--explain ID|CATEGORY", "Show why a finding fired", "rows, ATT&CK, edges"),
+            ("--tickets DIR", "Markdown ticket per high finding", "--ticket-min-score"),
+            ("--graphml FILE", "GraphML export for Gephi / yEd", ""),
+            ("--snapshot / --trend", "Save snapshots and compare the last two", ""),
+            ("--plugins-dir DIR", "Load plugin detectors run(G, add_finding)", ""),
+            ("--watch [DIR]", "Re-run when collector files change", "--watch-interval N"),
             ("--export-bh", "BloodHound-compatible full graph JSON", ""),
             ("--dot [FILE]", "Graphviz DOT export", "default: bloodbash.dot"),
             ("--report-pack DIR", "Multi-page HTML suite + CSVs + index.html", ""),
@@ -11423,6 +12339,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--azure-mfa-bypass", action="store_true", help="Azure MFA bypass signals")
     parser.add_argument("--azure-guest-access", action="store_true", help="Azure guest access")
     parser.add_argument("--azure-sp-abuse", action="store_true", help="Azure service principal abuse")
+    parser.add_argument(
+        "--azure-entra-posture",
+        action="store_true",
+        help="Entra consent grants, standing privileged assignments, unmanaged devices",
+    )
     parser.add_argument("--verbose", action="store_true", help="Verbose graph summary")
     parser.add_argument(
         "--all",
@@ -11461,8 +12382,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--export",
         nargs="?",
         const="md",
-        choices=["md", "json", "html", "csv", "yaml"],
-        help="Export results (md|json|html|csv|yaml)",
+        choices=["md", "json", "html", "csv", "yaml", "sarif"],
+        help="Export results (md|json|html|csv|yaml|sarif)",
     )
     parser.add_argument("--export-bh", action="store_true", help="Export BloodHound-compatible graph JSON")
     parser.add_argument("--dot", nargs="?", const="bloodbash.dot", help="Export Graphviz DOT file")
@@ -11600,6 +12521,83 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Zip the report pack into a single deliverable (default bloodbash-reports.zip)",
     )
     parser.add_argument(
+        "--fail-on-severity",
+        type=int,
+        metavar="N",
+        default=None,
+        help=(
+            "Exit 2 when any reported finding has severity >= N (CI gate). "
+            "Suppressed and baseline-matched findings do not count."
+        ),
+    )
+    parser.add_argument(
+        "--baseline",
+        metavar="REPORT.json",
+        help=(
+            "Compare against a previous --export json report. Prints new vs resolved "
+            "and hides already-known findings from the gate."
+        ),
+    )
+    parser.add_argument(
+        "--suppress",
+        metavar="FILE",
+        help="YAML suppressions: suppressions: [{category, contains, expires}]",
+    )
+    parser.add_argument(
+        "--explain",
+        metavar="ID|CATEGORY",
+        help="Explain one reported finding (row number or category), then exit",
+    )
+    parser.add_argument(
+        "--graphml",
+        metavar="FILE",
+        help="Export the graph as GraphML (Gephi / yEd)",
+    )
+    parser.add_argument(
+        "--tickets",
+        metavar="DIR",
+        help="Write one Markdown ticket per finding at or above --ticket-min-score",
+    )
+    parser.add_argument(
+        "--ticket-min-score",
+        type=int,
+        default=8,
+        metavar="N",
+        help="Minimum severity for --tickets (default 8)",
+    )
+    parser.add_argument(
+        "--snapshot",
+        action="store_true",
+        help="Save a findings snapshot for trend comparison (under the cache dir)",
+    )
+    parser.add_argument(
+        "--trend",
+        action="store_true",
+        help="Compare the two most recent findings snapshots and exit",
+    )
+    parser.add_argument(
+        "--plugins-dir",
+        metavar="DIR",
+        help="Directory of plugin detectors exposing run(G, add_finding)",
+    )
+    parser.add_argument(
+        "--watch",
+        metavar="DIR",
+        nargs="?",
+        const=".",
+        help=(
+            "Re-run analysis when collector files under DIR change. "
+            "Runs once first; Ctrl-C to stop."
+        ),
+    )
+    parser.add_argument(
+        "--watch-interval",
+        type=float,
+        default=5.0,
+        metavar="SECONDS",
+        help="Poll interval for --watch (default 5)",
+    )
+    parser.add_argument(
         "--profile",
         metavar="FILE",
         help="YAML analysis profile (path or built-in name under profiles/)",
@@ -11625,6 +12623,27 @@ def main():
 
     if getattr(args, "help_advanced", False):
         print_structured_help(prog=parser.prog, advanced=True)
+        sys.exit(0)
+
+    # --watch: re-run the same invocation when collector files change
+    if getattr(args, "watch", None) is not None:
+        watch_paths = [args.watch]
+        if args.merge:
+            watch_paths.extend(args.merge)
+
+        def _rerun():
+            global_findings.clear()
+            cmd = [sys.executable, os.path.abspath(__file__)] + _watch_argv(sys.argv[1:])
+            subprocess.run(cmd, check=False)
+
+        try:
+            run_watch_mode(
+                watch_paths,
+                interval=float(getattr(args, "watch_interval", 5.0) or 5.0),
+                run_once=_rerun,
+            )
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Watch stopped[/yellow]")
         sys.exit(0)
 
     # Resolve --owned-file / --from-user-file into comma lists before mode selection
@@ -11972,6 +12991,8 @@ def main():
         print_azure_guest_access(G, args.domain)
     if _run_azure(args.azure_sp_abuse):
         print_azure_service_principal_abuse(G, args.domain)
+    if getattr(args, "azure_entra_posture", False) or (run_all and _has_azure):
+        print_azure_consent_and_pim(G, args.domain)
     if args.owned:
         print_paths_to_owned(G, args.owned, args.domain)
     if args.from_user:
@@ -12100,7 +13121,89 @@ def main():
         export_bloodhound_compatible(G)
     if args.dot:
         export_to_dot(G, args.dot, args.domain)
-    print_prioritized_findings(show_all=bool(getattr(args, "all_findings", False)))
+    if getattr(args, "graphml", None):
+        export_graphml(G, args.graphml, args.domain)
+
+    # Suppressions, baseline diff, SARIF, tickets, snapshots, plugin detectors
+    suppressions = SuppressionSet()
+    if getattr(args, "suppress", None):
+        try:
+            suppressions = load_suppressions(args.suppress)
+            console.print(
+                f"[dim]Suppressions: {len(suppressions)} entry(ies) from {args.suppress}[/dim]"
+            )
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]--suppress: {exc}[/red]")
+            sys.exit(2)
+    if getattr(args, "baseline", None):
+        try:
+            diff = diff_findings_against_baseline(args.baseline)
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]--baseline: {exc}[/red]")
+            sys.exit(2)
+        print_baseline_diff(diff)
+        baseline_supp = SuppressionSet.from_baseline(args.baseline)
+        known_suppressed = baseline_supp.is_suppressed
+        remaining = [
+            f for f in apply_suppressions(global_findings, suppressions)
+            if not known_suppressed(f[1], f[2])
+        ]
+    else:
+        remaining = apply_suppressions(global_findings, suppressions)
+    plugins = []
+    if getattr(args, "plugins_dir", None):
+        try:
+            plugins = load_plugin_detectors(args.plugins_dir)
+        except OSError as exc:
+            console.print(f"[red]--plugins-dir: {exc}[/red]")
+            sys.exit(2)
+        if plugins:
+            run_plugin_detectors(plugins, G)
+            # Plugin findings are subject to the same suppression rules
+            remaining = apply_suppressions(global_findings, suppressions)
+
+    if getattr(args, "export", None) == "sarif":
+        export_sarif(
+            G,
+            "bloodbash.sarif",
+            findings=remaining,
+            suppressions=suppressions,
+            domain_filter=args.domain,
+        )
+    if getattr(args, "tickets", None):
+        export_tickets(G, args.tickets, min_score=int(getattr(args, "ticket_min_score", 8)))
+    if getattr(args, "snapshot", False):
+        save_findings_snapshot(G, cache_dir=getattr(args, "cache_dir", None))
+    print_prioritized_findings(
+        show_all=bool(getattr(args, "all_findings", False)),
+        findings=remaining,
+    )
+    if len(remaining) != len(global_findings):
+        console.print(
+            f"[dim]{len(global_findings) - len(remaining)} finding(s) hidden by "
+            f"suppressions/baseline[/dim]"
+        )
+    if getattr(args, "explain", None):
+        explain_finding(args.explain, G)
+        return
+    if getattr(args, "trend", False):
+        trend = compare_latest_two_snapshots(getattr(args, "cache_dir", None))
+        if not trend:
+            console.print("[yellow]Trend needs at least two --snapshot runs[/yellow]")
+        else:
+            console.print(
+                f"[bold]Trend[/bold]: {len(trend['new'])} new · "
+                f"{len(trend['resolved'])} resolved"
+            )
+            for cat, det in trend["new"][:20]:
+                console.print(f"  [red]+[/red] {cat}: {det}")
+            for cat, det in trend["resolved"][:20]:
+                console.print(f"  [green]-[/green] {cat}: {det}")
+    gate_code = evaluate_findings_gate(
+        getattr(args, "fail_on_severity", None),
+        findings=remaining,
+        suppressions=suppressions,
+    )
     elapsed = time.time() - start_time
     logger.info("Completed in %.2f seconds with %d findings", elapsed, len(global_findings))
     console.print(f"\n[italic green]Completed in {elapsed:.2f} seconds[/italic green]")
@@ -12111,6 +13214,12 @@ def main():
     print_approachability_footer(auto_default=auto_default_quick_wins)
     if DEBUG:
         console.print(f"[bold blue]DEBUG: Total findings: {len(global_findings)}[/bold blue]")
+    if gate_code:
+        console.print(
+            f"[bold red]Severity gate failed[/bold red]: findings at or above "
+            f"severity {args.fail_on_severity}"
+        )
+        sys.exit(gate_code)
 
 if __name__ == '__main__':
     try:

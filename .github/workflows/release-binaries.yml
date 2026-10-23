@@ -42,6 +42,8 @@ jobs:
             test_real_data_reliability.py test_graph_cache.py \
             test_owned_file.py test_golden_path.py test_deep_paths.py \
             test_repo_hygiene.py \
+            test_ingest_edge_cases.py test_detector_fixes.py \
+            test_reporting_features.py test_coverage_additions.py \
             test_ci_pytest_suite.py -q
 
       - name: Complex environment battery (required gate)
