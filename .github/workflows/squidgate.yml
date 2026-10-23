@@ -27,7 +27,7 @@ jobs:
           llm-api-key: ${{ env.LLM_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           llm-provider: opencode-go
-          llm-model: deepseek-v4.1-flash
+          llm-model: deepseek-v4.1-flash-1017
 
       - name: SquidGate not configured
         if: env.LLM_API_KEY == ''
