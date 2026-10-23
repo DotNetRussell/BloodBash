@@ -26,10 +26,11 @@ jobs:
         with:
           llm-api-key: ${{ env.LLM_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          llm-provider: opencode-go
-          llm-model: deepseek-v4.1-flash-1017
+          llm-provider: custom
+          llm-model: deepseek/deepseek-v4.1-flash-1017
+          llm-base-url: https://openrouter.ai/api/v1
 
       - name: SquidGate not configured
         if: env.LLM_API_KEY == ''
         run: |
-          echo "::notice title=SquidGate::Add the LLM_API_KEY secret (OpenCode Go key) to enable the PR security gate."
+          echo "::notice title=SquidGate::Add the LLM_API_KEY secret (OpenRouter key) to enable the PR security gate."
