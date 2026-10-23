@@ -6,6 +6,7 @@ Pack for the DefCon 34 CTF. Drop it on the Ludus host and run the playbooks.
 ```
 DC34/
   README.md
+  ludus-ss-lab.conf.example  # VPN template (fill in your own key)
   ludus/
     defcon-ctf-range.yml      # CTF empty AD (ctf.local)
     simple-ad-3vm.yml         # lab variant (lab.local)
@@ -40,6 +41,17 @@ DC34/
 6. Confirm FOOTHOLD Desktop has `BloodBash-CTF\` with SharpHound.exe, bloodbash.exe, Collect-AD.bat  
 7. Players: RDP FOOTHOLD → Collect-AD.bat → on-box bloodbash.exe  
 8. Reset: revert clean snapshot (or redeploy + plant)
+
+## VPN config
+
+`ludus-ss-lab.conf` is not in the repo. Copy the template and fill in the values issued by the range operator:
+
+```bash
+cp DC34/ludus-ss-lab.conf.example DC34/ludus-ss-lab.conf
+$EDITOR DC34/ludus-ss-lab.conf
+```
+
+The filled-in file is gitignored. Treat the private key as a credential: do not paste it into issues, PRs, or chat.
 
 ## Player flow
 RDP to FOOTHOLD, double-click Collect-AD.bat, then run bloodbash.exe on the zip right there on the machine. No need to copy the zip off to a laptop.

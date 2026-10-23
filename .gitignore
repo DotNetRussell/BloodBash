@@ -232,6 +232,15 @@ __marimo__/
 *_BloodHound.zip
 *Zone.Identifier
 
+# WireGuard / VPN configs (keys). Commit the .example template only.
+*.conf
+!*.conf.example
+
+# Generated lab run artifacts (regenerate from the zips)
+ludus-env-data/collections/*_bloodbash.txt
+ludus-env-data/collections/bloodbash-linux-x64
+ludus-env-data/run*_results.json
+
 # Local agent memory (not for remote)
 MEMORY.md
 AGENTS.md
