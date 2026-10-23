@@ -17,6 +17,10 @@ REQUIRED = (
     "test_golden_path.py",
     "test_deep_paths.py",
     "test_repo_hygiene.py",
+    "test_ingest_edge_cases.py",
+    "test_detector_fixes.py",
+    "test_reporting_features.py",
+    "test_coverage_additions.py",
     "test_ci_pytest_suite.py",
 )
 
