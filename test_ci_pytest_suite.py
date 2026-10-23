@@ -16,6 +16,7 @@ REQUIRED = (
     "test_owned_file.py",
     "test_golden_path.py",
     "test_deep_paths.py",
+    "test_repo_hygiene.py",
     "test_ci_pytest_suite.py",
 )
 

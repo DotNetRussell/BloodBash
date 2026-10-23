@@ -1,0 +1,12 @@
+[Interface]
+# Copy to ludus-ss-lab.conf and paste the private key issued to you.
+# Never commit the filled-in file (it is gitignored).
+PrivateKey = <YOUR_PRIVATE_KEY>
+Address = <YOUR_ADDRESS>/32
+
+[Peer]
+# Range peer public key and endpoint come from the lab operator.
+PublicKey = <PEER_PUBLIC_KEY>
+Endpoint = <LUDUS_HOST>:51820
+AllowedIPs = <RANGE_IP>/32,10.1.0.0/16
+PersistentKeepalive = 25

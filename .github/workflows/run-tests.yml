@@ -42,6 +42,7 @@ jobs:
           test_synthetic_corpus.py test_ludus_collections.py \
           test_real_data_reliability.py test_graph_cache.py \
           test_owned_file.py test_golden_path.py test_deep_paths.py \
+          test_repo_hygiene.py \
           test_ci_pytest_suite.py -q
 
     - name: Complex environment battery (required gate)
